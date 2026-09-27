@@ -7,16 +7,28 @@ export const BLEED = 3.175; // 1/8"
 // ponytail: panel sizes come from the listed box size; flap shapes are traced by eye from the
 // duplication.ca template image. Flaps fold inside so "close" is enough — do a plain-paper test fit.
 // New media format = another object shaped like this one.
-export const VHS = (() => {
+export const [VHS, VHS_SPLIT] = (() => {
   const IN = 25.4, W = 4.125 * IN, D = 1.0625 * IN, H = 7.4375 * IN;
-  const TUCK = 18, DUST = 22, GLUE = 14, R = 12;
+  const TUCK = 18, DUST = 22, GLUE = 14, R = 12, TAB = 10;
   const y0 = D + TUCK, y1 = y0 + H; // body top / bottom (bottom is the open end, with thumb notches)
   const a = 0, b = D, c = D + W, d = 2 * D + W, e = 2 * D + 2 * W; // side | front | spine | back | glue
   const notch = (cx) => { // shallow arc cut up into a spine's bottom edge, 21mm wide, 6mm deep
     const h = 10.5, dep = 6, r = (h * h + dep * dep) / (2 * dep);
     return `L ${cx + h} ${y1} A ${r} ${r} 0 0 0 ${cx - h} ${y1}`;
   };
-  return {
+  const top = [ // (a, y0-7) → (d, y0)
+    `M ${a} ${y0 - 7} L ${a + 2} ${y0 - 10} L ${a + 6} ${y0 - DUST} L ${b} ${y0 - DUST}`, // side dust flap
+    `L ${b} ${R} A ${R} ${R} 0 0 1 ${b + R} 0 L ${c - R} 0 A ${R} ${R} 0 0 1 ${c} ${R}`, // lid tuck
+    `L ${c} ${y0 - DUST} L ${d - 6} ${y0 - DUST} L ${d - 2} ${y0 - 10} L ${d} ${y0 - 7} L ${d} ${y0}`, // spine dust flap
+  ].join(' ');
+  const body = [ // (d, y0) → round the glue flap and bottom → close
+    `L ${e} ${y0} L ${e + GLUE} ${y0 + 5} L ${e + GLUE} ${y1 - 12} L ${e} ${y1}`, // back top + glue flap
+    notch((c + d) / 2), notch((a + b) / 2), `L ${a} ${y1} Z`,
+  ].join(' ');
+  // cuts inside the outline: flap/lid separations and the tuck lock slits
+  const slits = `M ${b} ${y0} L ${b} ${y0 - DUST} M ${c} ${y0} L ${c} ${y0 - DUST} M ${b} ${y0 - D} l 8 0 M ${c} ${y0 - D} l -8 0`;
+  const bodyFolds = `M ${b} ${y0} V ${y1} M ${c} ${y0} V ${y1} M ${d} ${y0} V ${y1} M ${e} ${y0} V ${y1}`;
+  const vhs = {
     name: 'VHS',
     w: e + GLUE, h: y1,
     panels: {
@@ -25,18 +37,28 @@ export const VHS = (() => {
       spine: { x: c, y: y0, w: D, h: H },
       back: { x: d, y: y0, w: W, h: H },
     },
-    cut: [
-      `M ${a} ${y0 - 7} L ${a + 2} ${y0 - 10} L ${a + 6} ${y0 - DUST} L ${b} ${y0 - DUST}`, // side dust flap
-      `L ${b} ${R} A ${R} ${R} 0 0 1 ${b + R} 0 L ${c - R} 0 A ${R} ${R} 0 0 1 ${c} ${R}`, // lid tuck
-      `L ${c} ${y0 - DUST} L ${d - 6} ${y0 - DUST} L ${d - 2} ${y0 - 10} L ${d} ${y0 - 7} L ${d} ${y0}`, // spine dust flap
-      `L ${e} ${y0} L ${e + GLUE} ${y0 + 5} L ${e + GLUE} ${y1 - 12} L ${e} ${y1}`, // back top + glue flap
-      notch((c + d) / 2), notch((a + b) / 2), `L ${a} ${y1} Z`,
-    ].join(' '),
-    // cuts inside the outline: flap/lid separations and the tuck lock slits
-    slits: `M ${b} ${y0} L ${b} ${y0 - DUST} M ${c} ${y0} L ${c} ${y0 - DUST} M ${b} ${y0 - D} l 8 0 M ${c} ${y0 - D} l -8 0`,
-    folds: `M ${b} ${y0} V ${y1} M ${c} ${y0} V ${y1} M ${d} ${y0} V ${y1} M ${e} ${y0} V ${y1} M ${a} ${y0} H ${d} M ${b} ${y0 - D} H ${c}`,
+    cut: `${top} ${body}`, slits,
+    folds: `${bodyFolds} M ${a} ${y0} H ${d} M ${b} ${y0 - D} H ${c}`,
   };
+  // Same box as two sheets so it fits A4: the body, and the lid + dust flaps on a TAB-high strip that
+  // folds down and glues inside the body's top edge. The editor still shows the whole box, split line in red.
+  const split = {
+    ...vhs, slits: `${slits} M ${a} ${y0} H ${e}`,
+    pieces: [
+      { name: 'body', x: 0, y: y0, w: vhs.w, h: H, cut: `M ${a} ${y0} ${body}`, slits: '', folds: bodyFolds },
+      {
+        name: 'lid', x: 0, y: 0, w: d, h: y0 + TAB,
+        cut: `${top} L ${d} ${y0 + TAB} L ${a} ${y0 + TAB} Z`, slits,
+        folds: `M ${a} ${y0} H ${d} M ${b} ${y0 - D} H ${c} M ${b} ${y0} V ${y0 + TAB} M ${c} ${y0} V ${y0 + TAB}`,
+        glue: { x: 0, y: y0, w: d, h: TAB },
+      },
+    ],
+  };
+  return [vhs, split];
 })();
+
+// What gets printed: one sheet per piece. Formats without `pieces` print whole.
+export const pieces = (fmt) => fmt.pieces || [{ name: '', x: 0, y: 0, w: fmt.w, h: fmt.h, cut: fmt.cut, slits: fmt.slits, folds: fmt.folds }];
 
 // Cassette J-card: [fold-outs…] front | spine | back flap, 4" tall. Straight cut, so just a rectangle.
 // extra = fold-out panels left of the front (they fold behind it), numbered outward: inside1 is next to the front.
@@ -63,25 +85,29 @@ export const PAPERS = [
   { name: 'Bleed box only', w: 0, h: 0 },
 ];
 
-export const fits = (p, fmt = VHS) => p.w >= fmt.w + 2 * BLEED && p.h >= fmt.h + 2 * BLEED;
+export const fits = (p, fmt = VHS) => pieces(fmt).every((pc) => p.w >= pc.w + 2 * BLEED && p.h >= pc.h + 2 * BLEED);
 
 const deflate = async (u8) =>
   new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
 
-// Minimal one-page PDF holding a single full-page image. pixels: packed RGB or CMYK bytes.
-// icc (CMYK only): profile bytes, embedded as the image's ICCBased colour space.
-export async function pdf({ wPt, hPt, width, height, pixels, cmyk, icc }) {
+// Minimal PDF, one full-page image per page. pages: [{ wPt, hPt, width, height, pixels }], pixels packed
+// RGB or CMYK bytes. icc (CMYK only): profile bytes, embedded once as the images' ICCBased colour space.
+export async function pdf({ pages, cmyk, icc }) {
   const enc = (s) => new TextEncoder().encode(s);
-  const img = await deflate(pixels);
-  const cs = cmyk ? (icc ? '[/ICCBased 6 0 R]' : '/DeviceCMYK') : '/DeviceRGB';
-  const content = `q ${wPt} 0 0 ${hPt} 0 0 cm /Im0 Do Q`;
+  const n = pages.length, iccId = 3 + 3 * n; // objects: 1 catalog, 2 page tree, then page/content/image per page, then icc
+  const cs = cmyk ? (icc ? `[/ICCBased ${iccId} 0 R]` : '/DeviceCMYK') : '/DeviceRGB';
   const objs = [
     ['<< /Type /Catalog /Pages 2 0 R >>'],
-    ['<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
-    [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${wPt} ${hPt}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`],
-    [`<< /Length ${content.length} >>\nstream\n${content}\nendstream`],
-    [`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace ${cs} /BitsPerComponent 8 /Filter /FlateDecode /Length ${img.length} >>\nstream\n`, img, '\nendstream'],
+    [`<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + 3 * i} 0 R`).join(' ')}] /Count ${n} >>`],
   ];
+  for (const [i, p] of pages.entries()) {
+    const id = 3 + 3 * i, img = await deflate(p.pixels), content = `q ${p.wPt} 0 0 ${p.hPt} 0 0 cm /Im0 Do Q`;
+    objs.push(
+      [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.wPt} ${p.hPt}] /Resources << /XObject << /Im0 ${id + 2} 0 R >> >> /Contents ${id + 1} 0 R >>`],
+      [`<< /Length ${content.length} >>\nstream\n${content}\nendstream`],
+      [`<< /Type /XObject /Subtype /Image /Width ${p.width} /Height ${p.height} /ColorSpace ${cs} /BitsPerComponent 8 /Filter /FlateDecode /Length ${img.length} >>\nstream\n`, img, '\nendstream'],
+    );
+  }
   if (cmyk && icc) {
     const p = await deflate(icc);
     objs.push([`<< /N 4 /Alternate /DeviceCMYK /Filter /FlateDecode /Length ${p.length} >>\nstream\n`, p, '\nendstream']);

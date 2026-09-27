@@ -1,4 +1,4 @@
-import { VHS, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
+import { VHS, VHS_SPLIT, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
 
 const LCMS_URL = 'https://cdn.jsdelivr.net/npm/lcms-wasm@1.0.5/dist/lcms.js';
 const FONTS = ['Montserrat', 'Bebas Neue', 'Righteous', 'Monoton', 'VT323', 'Press Start 2P', 'Russo One', 'Permanent Marker'];
@@ -35,7 +35,7 @@ const FIELDS = [ // key, label, default, multiline
 const defaults = () => ({
   theme: Object.fromEntries(FIELDS.map((f) => [f[0], f[2]])),
   colors: [...PALETTES.Rainbow], mirrorSpine: true, layers: [],
-  format: 'vhs', jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
+  format: 'vhs', splitLid: false, jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
   paper: 'A3', mode: 'rgb', guides: true, dielineOnly: false, profile: null, // profile: { name, asset }
 });
 
@@ -50,9 +50,9 @@ const O = 10; // theme shapes overdraw this far past panel edges; the panel clip
 let F, CUT, SLITS, FOLDS, AW, AH, geoKey, refit; // current format's geometry; AW × AH = bleed box
 function geo() { // rebuild when the format settings change
   S.jflap = Math.min(40, Math.max(10, +S.jflap || 15.9)); S.jextra = Math.min(3, Math.max(0, Math.round(+S.jextra) || 0));
-  const k = `${S.format}|${S.jflap}|${S.jextra}`;
+  const k = `${S.format}|${S.splitLid}|${S.jflap}|${S.jextra}`;
   if (k === geoKey) return;
-  geoKey = k; refit = true; F = S.format === 'jcard' ? jcard(S.jflap, S.jextra) : VHS;
+  geoKey = k; refit = true; F = S.format === 'jcard' ? jcard(S.jflap, S.jextra) : S.splitLid ? VHS_SPLIT : VHS;
   CUT = new Path2D(F.cut); SLITS = new Path2D(F.slits); FOLDS = new Path2D(F.folds);
   AW = F.w + 2 * B; AH = F.h + 2 * B;
 }
@@ -310,6 +310,11 @@ function drawLayer(ctx, l) {
 
 function drawArt(ctx) { // ctx origin = bleed-box top-left, units mm
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, AW, AH); ctx.clip(); ctx.translate(B, B);
+  drawContent(ctx);
+  ctx.restore();
+}
+
+function drawContent(ctx) { // ctx origin = dieline top-left
   const P = F.panels;
   if (S.dielineOnly) {
     ctx.fillStyle = '#fff'; ctx.fillRect(-B, -B, AW, AH);
@@ -324,13 +329,12 @@ function drawArt(ctx) { // ctx origin = bleed-box top-left, units mm
     for (const l of S.layers) if (l.visible) drawLayer(ctx, l);
     THEMES[F.name].text(ctx, P);
   }
-  ctx.restore();
 }
 
-function drawGuides(ctx, px) { // px = one device pixel in mm, so lines stay hairline on screen
+function drawGuides(ctx, px, g = { cut: CUT, slits: SLITS, folds: FOLDS }) { // px = one device pixel in mm, so lines stay hairline on screen
   ctx.save(); ctx.lineWidth = Math.max(0.2, px);
-  ctx.strokeStyle = '#e0001b'; ctx.stroke(CUT); ctx.stroke(SLITS);
-  ctx.strokeStyle = '#2f6fd6'; ctx.setLineDash([2, 1.5]); ctx.stroke(FOLDS);
+  ctx.strokeStyle = '#e0001b'; ctx.stroke(g.cut); ctx.stroke(g.slits);
+  ctx.strokeStyle = '#2f6fd6'; ctx.setLineDash([2, 1.5]); ctx.stroke(g.folds);
   ctx.restore();
 }
 
@@ -595,13 +599,15 @@ $('#fields').addEventListener('input', (e) => { S.theme[e.target.dataset.k] = e.
 $('#fields').addEventListener('change', commit);
 for (const k of ['mirrorSpine', 'guides', 'dielineOnly']) $(`#${k}`).onchange = (e) => { S[k] = e.target.checked; commit(); render(); };
 $('#format').onchange = (e) => { S.format = e.target.value; syncUI(); commit(); render(); }; // syncUI may swap the paper: same undo step
+$('#splitLid').onchange = (e) => { S.splitLid = e.target.checked; syncUI(); commit(); render(); };
 for (const k of ['jflap', 'jextra']) $(`#${k}`).onchange = (e) => { S[k] = +e.target.value; syncUI(); commit(); render(); };
 for (const k of ['paper', 'mode']) $(`#${k}`).onchange = (e) => { S[k] = e.target.value; commit(); };
 
 function syncUI() {
   geo();
   $('#format').value = S.format; $('#jflap').value = S.jflap; $('#jextra').value = S.jextra;
-  $('#jopts').hidden = S.format !== 'jcard'; $('#mirrorRow').hidden = S.format === 'jcard';
+  $('#jopts').hidden = S.format !== 'jcard'; $('#mirrorRow').hidden = $('#splitRow').hidden = S.format === 'jcard';
+  $('#splitLid').checked = S.splitLid;
   const papers = PAPERS.filter((p) => !p.w || fits(p, F)); // only sheets this format fits on
   $('#paper').innerHTML = opts(papers.map((p) => p.name));
   if (!papers.some((p) => p.name === S.paper)) S.paper = papers[0].name;
@@ -662,44 +668,57 @@ $('#softProof').onchange = async (e) => {
 
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.round(w); c.height = Math.round(h); return c; };
 
-function renderPage(dpi, paper) { // paper null/0 = bleed box only
-  geo();
-  const s = dpi / 25.4, pw = paper?.w || AW, ph = paper?.h || AH;
-  const page = mk(pw * s, ph * s), pc = page.getContext('2d');
-  pc.fillStyle = '#fff'; pc.fillRect(0, 0, page.width, page.height);
-  const art = mk(AW * s, AH * s), ac = art.getContext('2d');
-  ac.scale(s, s); drawArt(ac);
+function renderPiece(dpi, paper, pc) { // one printed sheet: piece pc of the current format, centred on paper (null = bleed box)
+  const s = dpi / 25.4, bw = pc.w + 2 * B, bh = pc.h + 2 * B, pw = paper?.w || bw, ph = paper?.h || bh;
+  const g = { cut: new Path2D(pc.cut), slits: new Path2D(pc.slits), folds: new Path2D(pc.folds) };
+  const page = mk(pw * s, ph * s), px = page.getContext('2d');
+  px.fillStyle = '#fff'; px.fillRect(0, 0, page.width, page.height);
+  const art = mk(bw * s, bh * s), ac = art.getContext('2d'), toPiece = [s, 0, 0, s, s * (B - pc.x), s * (B - pc.y)];
+  ac.setTransform(...toPiece); drawContent(ac);
+  if (pc.glue) { // tab hidden inside the box: leave it blank and say what it's for
+    const t = pc.glue;
+    ac.fillStyle = '#fff'; ac.fillRect(t.x - B, t.y, t.w + 2 * B, t.h + B);
+    text(ac, 'GLUE — fold down and stick inside the top of the box', t.x + t.w / 2, t.y + t.h / 2 + 1.1, 3, { weight: 600, color: '#999', align: 'center' });
+  }
   if (!S.dielineOnly) { // trim everything outside cut line + bleed
     const m = mk(art.width, art.height), mc = m.getContext('2d');
-    mc.setTransform(s, 0, 0, s, s * B, s * B); mc.fill(CUT); mc.lineWidth = 2 * B; mc.lineJoin = 'round'; mc.stroke(CUT);
+    mc.setTransform(...toPiece); mc.fill(g.cut); mc.lineWidth = 2 * B; mc.lineJoin = 'round'; mc.stroke(g.cut);
     ac.setTransform(1, 0, 0, 1, 0, 0); ac.globalCompositeOperation = 'destination-in'; ac.drawImage(m, 0, 0);
   }
-  const ox = (pw - AW) / 2, oy = (ph - AH) / 2;
-  pc.drawImage(art, Math.round(ox * s), Math.round(oy * s));
-  if (S.guides || S.dielineOnly) { pc.setTransform(s, 0, 0, s, (ox + B) * s, (oy + B) * s); drawGuides(pc, 0.2); }
+  const ox = (pw - bw) / 2, oy = (ph - bh) / 2;
+  px.drawImage(art, Math.round(ox * s), Math.round(oy * s));
+  if (S.guides || S.dielineOnly) { px.setTransform(s, 0, 0, s, (ox + B - pc.x) * s, (oy + B - pc.y) * s); drawGuides(px, 0.2, g); }
   return { page, pw, ph };
 }
 
 async function exportPdf() {
-  status('Rendering 300 DPI…'); await document.fonts.ready; await new Promise(requestAnimationFrame);
-  const cmyk = S.mode === 'cmyk', c = cmyk ? await getCms() : null;
-  const { page, pw, ph } = renderPage(300, PAPERS.find((p) => p.name === S.paper));
-  const rgba = page.getContext('2d').getImageData(0, 0, page.width, page.height).data;
-  status(cmyk ? 'Converting to CMYK…' : 'Compressing…'); await new Promise(requestAnimationFrame);
-  let pixels;
-  if (cmyk) pixels = transform(c.lib, c.toCmyk, rgba, 4);
-  else { pixels = new Uint8Array(rgba.length / 4 * 3); for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { pixels[j] = rgba[i]; pixels[j + 1] = rgba[i + 1]; pixels[j + 2] = rgba[i + 2]; } }
-  const pt = 72 / 25.4;
-  download(await pdf({ wPt: +(pw * pt).toFixed(2), hPt: +(ph * pt).toFixed(2), width: page.width, height: page.height, pixels, cmyk, icc: c?.bytes }), fileName('pdf'));
+  status('Rendering 300 DPI…'); await document.fonts.ready; await tick();
+  geo();
+  const cmyk = S.mode === 'cmyk', c = cmyk ? await getCms() : null, paper = PAPERS.find((p) => p.name === S.paper), pt = 72 / 25.4, pages = [];
+  for (const pc of pieces(F)) { // one page per piece (split VHS = body + lid)
+    const { page, pw, ph } = renderPiece(300, paper, pc);
+    const rgba = page.getContext('2d').getImageData(0, 0, page.width, page.height).data;
+    status(cmyk ? 'Converting to CMYK…' : 'Compressing…'); await tick();
+    let pixels;
+    if (cmyk) pixels = transform(c.lib, c.toCmyk, rgba, 4);
+    else { pixels = new Uint8Array(rgba.length / 4 * 3); for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { pixels[j] = rgba[i]; pixels[j + 1] = rgba[i + 1]; pixels[j + 2] = rgba[i + 2]; } }
+    pages.push({ wPt: +(pw * pt).toFixed(2), hPt: +(ph * pt).toFixed(2), width: page.width, height: page.height, pixels });
+  }
+  download(await pdf({ pages, cmyk, icc: c?.bytes }), fileName('pdf'));
   status('');
 }
 
 async function exportPng() {
   status('Rendering 300 DPI…'); await document.fonts.ready;
-  const { page } = renderPage(300, null);
-  page.toBlob((b) => { download(b, fileName('png')); status(''); }, 'image/png');
+  geo();
+  for (const pc of pieces(F)) {
+    const { page } = renderPiece(300, null, pc);
+    download(await new Promise((res) => page.toBlob(res, 'image/png')), fileName(pc.name ? `${pc.name}.png` : 'png'));
+  }
+  status('');
 }
 
+const tick = () => new Promise((r) => setTimeout(r, 30)); // let the status paint; rAF would stall in a background tab
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (err) { console.error(err); status(''); alert(err.message); } };
 $('#pdf').onclick = guard(exportPdf);
 $('#png').onclick = guard(exportPng);

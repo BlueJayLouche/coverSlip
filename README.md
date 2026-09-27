@@ -2,7 +2,7 @@
 
 Make printable covers for obsolete media. Two formats so far (pick one under **Format**):
 
-- **VHS slip box:** a bottom-load box, 4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″.
+- **VHS slip box:** a bottom-load box, 4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″. It needs A3 in one piece. Tick **Split lid** to fit it on A4 as two sheets: the box body, and the lid + dust flaps on a strip that folds down and glues inside the top of the box.
 - **Cassette J-card:** 4″ tall, with a 65.1 mm front, a 12.7 mm spine and an adjustable back flap (15.9 mm by default). You can add 0–3 fold-out panels behind the front; the back paragraphs flow across them as a track list.
 
 Fill in the retro theme, stack image and text layers on it, and export a 300 DPI PDF (RGB, or CMYK through an ICC profile) or a PNG.
@@ -38,7 +38,7 @@ You need to be online for Google Fonts and for the colour-management library (lo
 
 1. Tick **Test print (dieline only)** and print it on plain paper at **100% / actual size**. Cut it out and fold it around a real tape before using good stock. The flap shapes were traced from a template image, so check the fit.
 2. Red lines are cuts and dashed blue lines are folds. The open end (with the thumb notches) is at the bottom.
-3. The paper list only offers sheets the current format fits on. VHS needs A3 or larger. A J-card fits on A4 (Letter only up to 2 fold-outs).
+3. The paper list only offers sheets the current format fits on. VHS needs A3 or larger, or A4 with **Split lid** (the PDF then has two pages). A J-card fits on A4 (Letter only up to 2 fold-outs).
 
 ## Develop
 
