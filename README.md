@@ -5,6 +5,7 @@ Make printable covers for obsolete media. Pick a format under **Format**:
 | Format | Size (trim) | Fits |
 |---|---|---|
 | VHS slip box (retail) | 4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″ box, bottom-load | A3 — or A4 with **Split lid** (2 sheets: body, and lid + flaps on a strip that glues inside the top) |
+| VHS slip box, side-load | same box, opens on a long edge; end panels on the back, glue flaps on the front | A3 |
 | VHS clamshell wrap (rental) | 11⅝″ × 8⅜″: back 5¼″, spine 1⅛″, front 5¼″ | A3 |
 | Cassette J-card | 4″ tall; 65.1 mm front, 12.7 mm spine, adjustable flap (15.9 mm default), 0–3 fold-outs | A4 |
 | DVD case wrap | 273 × 183 mm, 14 mm spine | A4 / Letter |

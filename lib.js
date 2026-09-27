@@ -60,6 +60,35 @@ export const [VHS, VHS_SPLIT] = (() => {
 // What gets printed: one sheet per piece. Formats without `pieces` print whole.
 export const pieces = (fmt) => fmt.pieces || [{ name: '', x: 0, y: 0, w: fmt.w, h: fmt.h, cut: fmt.cut, slits: fmt.slits, folds: fmt.folds }];
 
+// Side-load VHS slip box: same box, but the tape goes in through a long edge. back | spine | front in a row;
+// the top/bottom end panels hang off the back, and the front's short tapered flaps glue inside them; the
+// spine has tapered dust flaps. The open edge is back-left + front-right, each with a trapezoid thumb notch.
+// ponytail: traced by eye from a user-supplied side-load template image — do a plain-paper test fold.
+export const VHS_SIDE = (() => {
+  const IN = 25.4, W = 4.125 * IN, D = 1.0625 * IN, H = 7.4375 * IN;
+  const SF = 25, ST = 2.5, FF = 18, FT = 2; // spine dust flap height/taper, front glue flap height/taper
+  const y0 = D, y1 = D + H, xs = W, xf = W + D, xr = 2 * W + D, cy = y0 + 0.722 * H; // notch sits below middle
+  const cut = [
+    `M 0 0 H ${xs} V ${y0}`, // top end panel
+    `L ${xs + ST} ${y0 - SF} H ${xf - ST} L ${xf} ${y0}`, // spine top dust flap
+    `L ${xf + FT} ${y0 - FF} H ${xr - FT} L ${xr} ${y0}`, // front top glue flap
+    `V ${cy - 13.5} L ${xr - 8.8} ${cy - 11} V ${cy + 11} L ${xr} ${cy + 13.5} V ${y1}`, // front open edge + notch
+    `L ${xr - FT} ${y1 + FF} H ${xf + FT} L ${xf} ${y1}`, // front bottom glue flap
+    `L ${xf - ST} ${y1 + SF} H ${xs + ST} L ${xs} ${y1}`, // spine bottom dust flap
+    `V ${y1 + D} H 0`, // bottom end panel
+    `V ${cy + 13.5} L 8.8 ${cy + 11} V ${cy - 11} L 0 ${cy - 13.5} Z`, // back open edge + notch
+  ].join(' ');
+  return {
+    name: 'VHS side-load', w: xr, h: y1 + D,
+    panels: {
+      top: { x: 0, y: 0, w: W, h: D }, back: { x: 0, y: y0, w: W, h: H }, spine: { x: xs, y: y0, w: D, h: H },
+      front: { x: xf, y: y0, w: W, h: H }, bottom: { x: 0, y: y1, w: W, h: D },
+    },
+    cut, slits: '',
+    folds: `M 0 ${y0} H ${xr} M 0 ${y1} H ${xr} M ${xs} ${y0} V ${y1} M ${xf} ${y0} V ${y1}`,
+  };
+})();
+
 // Cassette J-card: [fold-outs…] front | spine | back flap, 4" tall. Straight cut, so just a rectangle.
 // extra = fold-out panels left of the front (they fold behind it), numbered outward: inside1 is next to the front.
 export function jcard(flap = 15.9, extra = 0) {

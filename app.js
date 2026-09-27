@@ -1,4 +1,4 @@
-import { VHS, VHS_SPLIT, CLAMSHELL, DVD, BLURAY, CD, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
+import { VHS, VHS_SPLIT, VHS_SIDE, CLAMSHELL, DVD, BLURAY, CD, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
 import { PdfCtx } from './vector.js';
 
 const LCMS_URL = 'https://cdn.jsdelivr.net/npm/lcms-wasm@1.0.5/dist/lcms.js';
@@ -52,7 +52,7 @@ const $ = (q) => document.querySelector(q);
 const uid = () => Math.random().toString(36).slice(2, 10);
 const O = 10; // theme shapes overdraw this far past panel edges; the panel clip trims them
 const FORMATS = { // S.format → geometry
-  vhs: () => (S.splitLid ? VHS_SPLIT : VHS), clamshell: () => CLAMSHELL, dvd: () => DVD, bluray: () => BLURAY, cd: () => CD,
+  vhs: () => (S.splitLid ? VHS_SPLIT : VHS), vhsside: () => VHS_SIDE, clamshell: () => CLAMSHELL, dvd: () => DVD, bluray: () => BLURAY, cd: () => CD,
   jcard: () => jcard(S.jflap, S.jextra),
 };
 let F, CUT, SLITS, FOLDS, AW, AH, geoKey, refit; // current format's geometry; AW × AH = bleed box
@@ -281,7 +281,11 @@ const TEXTS = {
   spine: (c, w, h) => (wide(w) ? scaled(spineText) : jSpineText)(c, w, h),
   side: (c, w, h) => S.mirrorSpine && scaled(spineText)(c, w, h),
   flap: flapText,
+  top: (c, w, h) => endText(c, w, h), bottom: (c, w, h) => { c.translate(w, h); c.rotate(Math.PI); endText(c, w, h); }, // bottom reads upside down
 };
+function endText(ctx, w, h) { // side-load end panels: the spine title, centred
+  text(ctx, S.theme.spineTitle, w / 2, h / 2 + Math.min(h * 0.45, 12) * 0.36, Math.min(h * 0.45, 12), { color: col().dark, align: 'center', maxW: w - 12 });
+}
 function themeShapes(ctx, P) { for (const [k, p] of Object.entries(P)) if (SHAPES[role(k)]) inPanel(ctx, p, SHAPES[role(k)]); }
 function themeText(ctx, P) { for (const [k, p] of Object.entries(P)) if (TEXTS[role(k)]) inPanel(ctx, p, TEXTS[role(k)]); insidesText(ctx, P); }
 

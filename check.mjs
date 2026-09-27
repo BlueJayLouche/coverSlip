@@ -1,6 +1,6 @@
 // Self-check for the maths that fails silently: node check.mjs
 import assert from 'node:assert/strict';
-import { VHS, VHS_SPLIT, CLAMSHELL, DVD, BLURAY, CD, jcard, PAPERS, fits, pdf, svgToPdf } from './lib.js';
+import { VHS, VHS_SPLIT, VHS_SIDE, CLAMSHELL, DVD, BLURAY, CD, jcard, PAPERS, fits, pdf, svgToPdf } from './lib.js';
 
 const { side, front, spine, back } = VHS.panels;
 assert.equal(front.x, side.x + side.w, 'front abuts side');
@@ -31,6 +31,15 @@ assert.ok(CD.panels.spine2.x + CD.panels.spine2.w === 151 && CD.panels.back.h ==
 assert.ok(CD.panels.front.x - 151 >= 2 * 3.175, 'CD pieces far enough apart for both bleeds');
 assert.ok(fits(paper('A3'), CLAMSHELL) && !fits(paper('A4'), CLAMSHELL), 'clamshell needs A3');
 for (const f of [DVD, BLURAY, CD]) assert.ok(fits(paper('A4'), f), `${f.name} fits A4`);
+
+{ // side-load: same box faces as bottom-load, end panels as deep as the spine
+  const P = VHS_SIDE.panels;
+  assert.ok(P.spine.x === P.back.x + P.back.w && P.front.x === P.spine.x + P.spine.w, 'side-load panels abut');
+  assert.ok(P.front.w === front.w && P.front.h === front.h && P.spine.w === spine.w, 'side-load box = same box');
+  assert.ok(P.top.h === spine.w && P.bottom.y === P.back.y + P.back.h, 'end panels hang off the back');
+  assert.ok(fits(paper('A3'), VHS_SIDE) && !fits(paper('A4'), VHS_SIDE), 'side-load needs A3');
+  assert.ok(svgToPdf(VHS_SIDE.cut).endsWith('h'), 'side-load cut converts');
+}
 
 // PDF: every xref offset must point at its "n 0 obj", and startxref at "xref".
 const page = { wPt: 10, hPt: 10, content: 'q 10 0 0 10 0 0 cm /Im0 Do Q', images: { Im0: { width: 2, height: 2, pixels: new Uint8Array(16), cmyk: true } } };
