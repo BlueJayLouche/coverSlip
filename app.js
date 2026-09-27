@@ -393,6 +393,16 @@ function render() {
     for (let i = 0, j = 0; i < im.data.length; i += 4, j += 3) { im.data[i] = rgb[j]; im.data[i + 1] = rgb[j + 1]; im.data[i + 2] = rgb[j + 2]; }
     vctx.putImageData(im, 0, 0);
   }
+  if (F.pieces) { // split lid: make the cut between the two sheets obvious
+    const a = toScreen({ x: 0, y: F.pieces[0].y }), b = toScreen({ x: F.w, y: F.pieces[0].y }), label = '✂ split — lid + flaps print on sheet 2';
+    vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    vctx.strokeStyle = '#e0001b'; vctx.lineWidth = 2; vctx.setLineDash([8, 5]);
+    vctx.beginPath(); vctx.moveTo(a.x, a.y); vctx.lineTo(b.x, b.y); vctx.stroke(); vctx.setLineDash([]);
+    vctx.font = '600 11px system-ui'; vctx.textBaseline = 'middle'; vctx.textAlign = 'left';
+    const w = vctx.measureText(label).width + 12;
+    vctx.fillStyle = '#e0001b'; vctx.fillRect(b.x - w, a.y - 22, w, 18);
+    vctx.fillStyle = '#fff'; vctx.fillText(label, b.x - w + 6, a.y - 13);
+  }
   const l = selected();
   if (l && l.visible) {
     const h = handles(l);
@@ -599,7 +609,7 @@ $('#fields').addEventListener('input', (e) => { S.theme[e.target.dataset.k] = e.
 $('#fields').addEventListener('change', commit);
 for (const k of ['mirrorSpine', 'guides', 'dielineOnly']) $(`#${k}`).onchange = (e) => { S[k] = e.target.checked; commit(); render(); };
 $('#format').onchange = (e) => { S.format = e.target.value; syncUI(); commit(); render(); }; // syncUI may swap the paper: same undo step
-$('#splitLid').onchange = (e) => { S.splitLid = e.target.checked; syncUI(); commit(); render(); };
+$('#splitLid').onchange = (e) => { S.splitLid = e.target.checked; if (S.splitLid) S.paper = 'A4'; syncUI(); commit(); render(); }; // the point of splitting is A4
 for (const k of ['jflap', 'jextra']) $(`#${k}`).onchange = (e) => { S[k] = +e.target.value; syncUI(); commit(); render(); };
 for (const k of ['paper', 'mode']) $(`#${k}`).onchange = (e) => { S[k] = e.target.value; commit(); };
 
