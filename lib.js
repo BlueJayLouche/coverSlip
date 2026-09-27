@@ -1,0 +1,83 @@
+// Pure geometry + PDF writing. No DOM, so check.mjs can run it under Node.
+// All units are millimetres unless a name says otherwise.
+
+export const BLEED = 3.175; // 1/8"
+
+// Bottom-load VHS slip box, 4-1/8" x 1-1/16" x 7-7/16".
+// ponytail: panel sizes come from the listed box size; flap shapes are traced by eye from the
+// duplication.ca template image. Flaps fold inside so "close" is enough — do a plain-paper test fit.
+// New media format = another object shaped like this one.
+export const VHS = (() => {
+  const IN = 25.4, W = 4.125 * IN, D = 1.0625 * IN, H = 7.4375 * IN;
+  const TUCK = 18, DUST = 22, GLUE = 14, R = 12;
+  const y0 = D + TUCK, y1 = y0 + H; // body top / bottom (bottom is the open end, with thumb notches)
+  const a = 0, b = D, c = D + W, d = 2 * D + W, e = 2 * D + 2 * W; // side | front | spine | back | glue
+  const notch = (cx) => { // shallow arc cut up into a spine's bottom edge, 21mm wide, 6mm deep
+    const h = 10.5, dep = 6, r = (h * h + dep * dep) / (2 * dep);
+    return `L ${cx + h} ${y1} A ${r} ${r} 0 0 0 ${cx - h} ${y1}`;
+  };
+  return {
+    name: 'VHS',
+    w: e + GLUE, h: y1,
+    panels: {
+      side: { x: a, y: y0, w: D, h: H },
+      front: { x: b, y: y0, w: W, h: H },
+      spine: { x: c, y: y0, w: D, h: H },
+      back: { x: d, y: y0, w: W, h: H },
+    },
+    cut: [
+      `M ${a} ${y0 - 7} L ${a + 2} ${y0 - 10} L ${a + 6} ${y0 - DUST} L ${b} ${y0 - DUST}`, // side dust flap
+      `L ${b} ${R} A ${R} ${R} 0 0 1 ${b + R} 0 L ${c - R} 0 A ${R} ${R} 0 0 1 ${c} ${R}`, // lid tuck
+      `L ${c} ${y0 - DUST} L ${d - 6} ${y0 - DUST} L ${d - 2} ${y0 - 10} L ${d} ${y0 - 7} L ${d} ${y0}`, // spine dust flap
+      `L ${e} ${y0} L ${e + GLUE} ${y0 + 5} L ${e + GLUE} ${y1 - 12} L ${e} ${y1}`, // back top + glue flap
+      notch((c + d) / 2), notch((a + b) / 2), `L ${a} ${y1} Z`,
+    ].join(' '),
+    // cuts inside the outline: flap/lid separations and the tuck lock slits
+    slits: `M ${b} ${y0} L ${b} ${y0 - DUST} M ${c} ${y0} L ${c} ${y0 - DUST} M ${b} ${y0 - D} l 8 0 M ${c} ${y0 - D} l -8 0`,
+    folds: `M ${b} ${y0} V ${y1} M ${c} ${y0} V ${y1} M ${d} ${y0} V ${y1} M ${e} ${y0} V ${y1} M ${a} ${y0} H ${d} M ${b} ${y0 - D} H ${c}`,
+  };
+})();
+
+// Landscape sheets the dieline + bleed fits on (A4 and Legal are too small). null = trim to bleed box.
+export const PAPERS = [
+  { name: 'A3', w: 420, h: 297 },
+  { name: 'SRA3', w: 450, h: 320 },
+  { name: 'Tabloid 11×17"', w: 431.8, h: 279.4 },
+  { name: '12×18"', w: 457.2, h: 304.8 },
+  { name: '13×19"', w: 482.6, h: 330.2 },
+  { name: 'Bleed box only', w: 0, h: 0 },
+];
+
+export const fits = (p, fmt = VHS) => p.w >= fmt.w + 2 * BLEED && p.h >= fmt.h + 2 * BLEED;
+
+const deflate = async (u8) =>
+  new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+
+// Minimal one-page PDF holding a single full-page image. pixels: packed RGB or CMYK bytes.
+// icc (CMYK only): profile bytes, embedded as the image's ICCBased colour space.
+export async function pdf({ wPt, hPt, width, height, pixels, cmyk, icc }) {
+  const enc = (s) => new TextEncoder().encode(s);
+  const img = await deflate(pixels);
+  const cs = cmyk ? (icc ? '[/ICCBased 6 0 R]' : '/DeviceCMYK') : '/DeviceRGB';
+  const content = `q ${wPt} 0 0 ${hPt} 0 0 cm /Im0 Do Q`;
+  const objs = [
+    ['<< /Type /Catalog /Pages 2 0 R >>'],
+    ['<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
+    [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${wPt} ${hPt}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>`],
+    [`<< /Length ${content.length} >>\nstream\n${content}\nendstream`],
+    [`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace ${cs} /BitsPerComponent 8 /Filter /FlateDecode /Length ${img.length} >>\nstream\n`, img, '\nendstream'],
+  ];
+  if (cmyk && icc) {
+    const p = await deflate(icc);
+    objs.push([`<< /N 4 /Alternate /DeviceCMYK /Filter /FlateDecode /Length ${p.length} >>\nstream\n`, p, '\nendstream']);
+  }
+  const parts = [], offsets = [];
+  let pos = 0;
+  const put = (x) => { const u = typeof x === 'string' ? enc(x) : x; parts.push(u); pos += u.length; };
+  put('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  objs.forEach((o, i) => { offsets.push(pos); put(`${i + 1} 0 obj\n`); o.forEach(put); put('\nendobj\n'); });
+  const xref = pos;
+  put(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`);
+  put(`trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}

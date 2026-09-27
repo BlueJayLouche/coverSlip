@@ -1,0 +1,4 @@
+# reference images (third-party, not ours to redistribute)
+*.jpg
+*.webp
+.DS_Store
