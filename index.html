@@ -44,6 +44,12 @@
   .note { color: var(--dim); font-size: 11px; margin: 4px 0 8px; }
   #status { color: var(--dim); font-size: 12px; }
   .empty { color: var(--dim); font-style: italic; }
+  summary { cursor: pointer; list-style: none; } summary h2 { display: inline; } summary::before { content: '▸ '; color: var(--dim); } details[open] summary::before { content: '▾ '; }
+  #history { list-style: none; margin: 4px 0 0; padding: 0; max-height: 260px; overflow-y: auto; }
+  #history li { padding: 2px 6px; border-radius: 3px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #history li:hover { background: #30313a; }
+  #history li.cur { background: #3a2a1c; outline: 1px solid var(--accent); }
+  #history li.future { color: var(--dim); font-style: italic; }
 </style>
 </head>
 <body>
@@ -63,6 +69,7 @@
   <input id="imgFile" type="file" accept="image/*" multiple hidden>
   <input id="projFile" type="file" accept=".json,application/json" hidden>
   <input id="iccFile" type="file" accept=".icc,.icm" hidden>
+  <input id="fontFile" type="file" accept=".ttf,.otf,.woff,.woff2" hidden>
 </header>
 <main>
   <aside>
@@ -88,11 +95,14 @@
     <label>Paper <select id="paper"></select></label>
     <label>Colour <select id="mode"><option value="rgb">RGB (home printing)</option><option value="cmyk">CMYK (ICC profile)</option></select></label>
     <label class="row"><button id="loadIcc">Load ICC profile…</button> <span id="iccName" class="empty">none</span></label>
+    <label>Rendering intent <select id="intent"><option value="0">Perceptual</option><option value="1">Relative colorimetric</option><option value="2">Saturation</option><option value="3">Absolute colorimetric</option></select></label>
     <label class="row"><input type="checkbox" id="softProof"> Soft proof on screen</label>
     <label class="row"><input type="checkbox" id="guides"> Cut &amp; fold lines</label>
     <label class="row"><input type="checkbox" id="dielineOnly"> Test print (dieline only)</label>
+    <label>PDF type <select id="pdfKind"><option value="raster">Raster, 300 DPI (exact preview)</option><option value="vector">Vector (sharp text &amp; shapes)</option></select></label>
     <div class="grid2"><button class="go" id="pdf">Export PDF</button><button id="png">Export PNG</button></div>
-    <p class="note">300 DPI raster. CMYK converts with the loaded ICC profile (perceptual intent) — ask your print shop which profile they want, e.g. ISO Coated v2 / FOGRA39 from eci.org.</p>
+    <p class="note">CMYK converts with the loaded ICC profile — ask your print shop which profile they want, e.g. ISO Coated v2 / FOGRA39 from eci.org. Vector PDFs keep text and shapes as outlines (photos stay embedded images) and are trimmed to the bleed box rather than the die shape.</p>
+    <details id="histBox"><summary><h2>History</h2></summary><ol id="history"></ol></details>
   </aside>
 </main>
 <script type="module" src="app.js"></script>

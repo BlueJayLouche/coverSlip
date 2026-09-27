@@ -1,6 +1,9 @@
 import { VHS, VHS_SPLIT, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
+import { PdfCtx } from './vector.js';
 
 const LCMS_URL = 'https://cdn.jsdelivr.net/npm/lcms-wasm@1.0.5/dist/lcms.js';
+const OT_URL = 'https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.module.js';
+const WOFF = (slug, w) => `https://cdn.jsdelivr.net/npm/@fontsource/${slug}@5/files/${slug}-latin-${w}-normal.woff`; // same Google fonts, as WOFF for outlining
 const FONTS = ['Montserrat', 'Bebas Neue', 'Righteous', 'Monoton', 'VT323', 'Press Start 2P', 'Russo One', 'Permanent Marker'];
 const BLENDS = ['source-over', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity'];
 const PALETTES = { // 5 stripes (inner → outer), dark, light
@@ -36,12 +39,13 @@ const defaults = () => ({
   theme: Object.fromEntries(FIELDS.map((f) => [f[0], f[2]])),
   colors: [...PALETTES.Rainbow], mirrorSpine: true, layers: [],
   format: 'vhs', splitLid: false, jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
-  paper: 'A3', mode: 'rgb', guides: true, dielineOnly: false, profile: null, // profile: { name, asset }
+  fonts: [], // uploaded: { name, asset }
+  paper: 'A3', mode: 'rgb', intent: 0, pdfKind: 'raster', guides: true, dielineOnly: false, profile: null, // profile: { name, asset }
 });
 
 let S = defaults();       // everything that's saved and undoable
 let assets = {};          // id → { url, img? }  (images and the ICC profile, as data URLs)
-let sel = null;           // selected layer id
+let sels = [];            // selected layer ids
 let softProof = false, cms = null, lcmsP = null;
 const view = { s: 1, x: 0, y: 0, fit: 1 }; // css px per mm, offset of bleed-box origin
 const $ = (q) => document.querySelector(q);
@@ -360,7 +364,9 @@ const toScreen = (p) => ({ x: view.x + (p.x + B) * view.s, y: view.y + (p.y + B)
 const rotp = (p, deg) => { const a = deg * Math.PI / 180; return { x: p.x * Math.cos(a) - p.y * Math.sin(a), y: p.x * Math.sin(a) + p.y * Math.cos(a) }; };
 const toLocal = (l, p) => rotp({ x: p.x - l.x, y: p.y - l.y }, -l.rot);
 const toWorld = (l, p) => { const q = rotp(p, l.rot); return { x: l.x + q.x, y: l.y + q.y }; };
-const selected = () => S.layers.find((l) => l.id === sel) || null;
+const selection = () => S.layers.filter((l) => sels.includes(l.id));
+const selected = () => (sels.length === 1 && S.layers.find((l) => l.id === sels[0])) || null; // the one layer that gets handles
+const toggleSel = (id) => { sels = sels.includes(id) ? sels.filter((x) => x !== id) : [...sels, id]; };
 function reclip(l) { // a panel-clipped layer moved onto another panel follows it, instead of vanishing
   if (l.clip === 'sheet') return;
   const hit = Object.entries(F.panels).find(([, p]) => l.x >= p.x && l.x < p.x + p.w && l.y >= p.y && l.y < p.y + p.h);
@@ -372,6 +378,33 @@ function handles(l) { // screen-space positions of the corner (scale) and rotate
   const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => toScreen(toWorld(l, { x: a * w / 2, y: b * h / 2 })));
   const rot = toScreen(toWorld(l, { x: 0, y: -h / 2 - 24 / view.s }));
   return { corners, rot, top: toScreen(toWorld(l, { x: 0, y: -h / 2 })) };
+}
+
+function aabb(l) { // axis-aligned box around a (rotated) layer
+  const [w, h] = layerSize(l), ps = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => toWorld(l, { x: a * w / 2, y: b * h / 2 }));
+  const xs = ps.map((p) => p.x), ys = ps.map((p) => p.y);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+}
+
+// Smart guides: snap the moving selection's edges/centre to panel edges + centres, folds, trim, bleed and other
+// layers, within 6 screen px. Alt skips snapping.
+let snapLines = [];
+function snap(orig, dx, dy) {
+  const ids = new Set(orig.map((l) => l.id)), bs = orig.map(aabb);
+  const box = { x0: Math.min(...bs.map((b) => b.x0)), x1: Math.max(...bs.map((b) => b.x1)), y0: Math.min(...bs.map((b) => b.y0)), y1: Math.max(...bs.map((b) => b.y1)) };
+  const tx = [-B, 0, F.w, F.w + B], ty = [-B, 0, F.h, F.h + B];
+  for (const p of Object.values(F.panels)) { tx.push(p.x, p.x + p.w / 2, p.x + p.w); ty.push(p.y, p.y + p.h / 2, p.y + p.h); }
+  for (const l of S.layers) if (l.visible && !ids.has(l.id)) { const b = aabb(l); tx.push(b.x0, (b.x0 + b.x1) / 2, b.x1); ty.push(b.y0, (b.y0 + b.y1) / 2, b.y1); }
+  const tol = 6 / view.s, lines = [];
+  const best = (edges, targets, d) => {
+    let hit = null;
+    for (const e of edges) for (const t of targets) { const off = t - (e + d); if (Math.abs(off) < tol && (!hit || Math.abs(off) < Math.abs(hit.off))) hit = { off, t }; }
+    return hit;
+  };
+  const hx = best([box.x0, (box.x0 + box.x1) / 2, box.x1], tx, dx), hy = best([box.y0, (box.y0 + box.y1) / 2, box.y1], ty, dy);
+  if (hx) { dx += hx.off; lines.push({ x: hx.t }); }
+  if (hy) { dy += hy.off; lines.push({ y: hy.t }); }
+  return { dx, dy, lines };
 }
 
 function render() {
@@ -403,12 +436,21 @@ function render() {
     vctx.fillStyle = '#e0001b'; vctx.fillRect(b.x - w, a.y - 22, w, 18);
     vctx.fillStyle = '#fff'; vctx.fillText(label, b.x - w + 6, a.y - 13);
   }
-  const l = selected();
-  if (l && l.visible) {
+  vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  vctx.strokeStyle = '#ff2bd6'; vctx.lineWidth = 1;
+  for (const g of snapLines) {
+    vctx.beginPath();
+    if ('x' in g) { const x = toScreen({ x: g.x, y: 0 }).x; vctx.moveTo(x, 0); vctx.lineTo(x, r.height); }
+    else { const y = toScreen({ x: 0, y: g.y }).y; vctx.moveTo(0, y); vctx.lineTo(r.width, y); }
+    vctx.stroke();
+  }
+  const one = selected();
+  for (const l of selection()) {
+    if (!l.visible) continue;
     const h = handles(l);
-    vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     vctx.strokeStyle = '#ff6a00'; vctx.lineWidth = 1.5; vctx.beginPath();
     h.corners.forEach((c, i) => (i ? vctx.lineTo(c.x, c.y) : vctx.moveTo(c.x, c.y))); vctx.closePath();
+    if (l !== one) { vctx.stroke(); continue; } // several selected: outlines only, no handles
     vctx.moveTo(h.top.x, h.top.y); vctx.lineTo(h.rot.x, h.rot.y); vctx.stroke();
     vctx.fillStyle = '#fff';
     for (const c of h.corners) { vctx.fillRect(c.x - 5, c.y - 5, 10, 10); vctx.strokeRect(c.x - 5, c.y - 5, 10, 10); }
@@ -424,17 +466,24 @@ cv.addEventListener('pointerdown', (e) => {
   if (l && l.visible) { const h = handles(l); mode = near(h.rot) ? 'rotate' : h.corners.some(near) ? 'scale' : null; }
   if (!mode) {
     l = [...S.layers].reverse().find((x) => { if (!x.visible) return false; const p = toLocal(x, m), [w, h] = layerSize(x); return Math.abs(p.x) <= w / 2 && Math.abs(p.y) <= h / 2; }) || null;
-    sel = l?.id ?? null; mode = l ? 'move' : 'pan';
+    if (e.shiftKey || e.metaKey || e.ctrlKey) { if (l) toggleSel(l.id); } // add/remove from the selection
+    else if (!l || !sels.includes(l.id)) sels = l ? [l.id] : []; // clicking inside a multi-selection keeps it, to drag them all
+    mode = l && sels.includes(l.id) ? 'move' : 'pan';
     syncLayers();
   }
-  drag = { mode, m, sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, l: l && { ...l } };
+  drag = { mode, m, sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, l: l && { ...l }, ls: selection().map((x) => ({ ...x })) };
   cv.setPointerCapture(e.pointerId); render();
 });
 cv.addEventListener('pointermove', (e) => {
   if (!drag) return;
   const m = toMm(e), l = selected(), o = drag.l;
   if (drag.mode === 'pan') { view.x = drag.vx + e.clientX - drag.sx; view.y = drag.vy + e.clientY - drag.sy; }
-  else if (drag.mode === 'move') { l.x = o.x + m.x - drag.m.x; l.y = o.y + m.y - drag.m.y; reclip(l); }
+  else if (drag.mode === 'move') {
+    let dx = m.x - drag.m.x, dy = m.y - drag.m.y;
+    snapLines = [];
+    if (!e.altKey) ({ dx, dy, lines: snapLines } = snap(drag.ls, dx, dy));
+    for (const o of drag.ls) { const x = S.layers.find((q) => q.id === o.id); if (x) { x.x = o.x + dx; x.y = o.y + dy; reclip(x); } }
+  }
   else if (drag.mode === 'rotate') {
     let a = Math.atan2(m.y - o.y, m.x - o.x) * 180 / Math.PI + 90;
     if (e.shiftKey) a = Math.round(a / 15) * 15;
@@ -448,7 +497,7 @@ cv.addEventListener('pointermove', (e) => {
   }
   render(); if (drag.mode !== 'pan') syncProps();
 });
-cv.addEventListener('pointerup', () => { if (drag && drag.mode !== 'pan') commit(); drag = null; });
+cv.addEventListener('pointerup', () => { if (drag && drag.mode !== 'pan') commit(); drag = null; if (snapLines.length) { snapLines = []; render(); } });
 cv.addEventListener('wheel', (e) => {
   e.preventDefault();
   const r = cv.getBoundingClientRect();
@@ -461,20 +510,52 @@ new ResizeObserver(render).observe(stage);
 
 // ---------- undo / autosave / project files ----------
 
-let snap = JSON.stringify(S), undos = [], redos = [];
+let hist, hi; // undo history: snapshots of S; hi = the one on screen
+function resetHistory(label) { hist = [{ snap: JSON.stringify(S), label }]; hi = 0; syncHistory(); }
 function commit() {
   const now = JSON.stringify(S);
-  if (now === snap) return;
-  undos.push(snap); if (undos.length > 50) undos.shift();
-  redos = []; snap = now; autosave();
+  if (now === hist[hi].snap) return;
+  hist = hist.slice(0, hi + 1);
+  hist.push({ snap: now, label: describe(hist[hi].snap, now) });
+  if (hist.length > 51) hist.shift();
+  hi = hist.length - 1; syncHistory(); autosave();
 }
-function step(from, to) {
+function jump(i) {
   commit();
-  if (!from.length) return;
-  to.push(snap); snap = from.pop(); S = JSON.parse(snap);
+  if (i < 0 || i >= hist.length || i === hi) return;
+  hi = i; S = JSON.parse(hist[hi].snap);
+  sels = sels.filter((id) => S.layers.some((l) => l.id === id));
   syncUI(); render(); autosave();
 }
-const undo = () => step(undos, redos), redo = () => step(redos, undos);
+const undo = () => jump(hi - 1), redo = () => jump(hi + 1);
+
+const NAMES = { ...Object.fromEntries(FIELDS.map((f) => [f[0], f[1]])), colors: 'Palette', format: 'Format', splitLid: 'Split lid', jflap: 'Flap width', jextra: 'Fold-outs', paper: 'Paper', mode: 'Colour mode', intent: 'Rendering intent', pdfKind: 'PDF type', guides: 'Cut & fold lines', dielineOnly: 'Test print', mirrorSpine: 'Mirror spine', profile: 'ICC profile', fonts: 'Upload font' };
+function describe(a, b) { // history label for the change a → b (JSON snapshots)
+  a = JSON.parse(a); b = JSON.parse(b);
+  const name = (l) => (l.type === 'image' ? l.name : `“${l.text.split('\n')[0].slice(0, 18)}”`);
+  const d = b.layers.length - a.layers.length;
+  if (d > 0) return `Add ${name(b.layers.find((l) => !a.layers.some((x) => x.id === l.id)))}`;
+  if (d < 0) return -d > 1 ? `Delete ${-d} layers` : `Delete ${name(a.layers.find((l) => !b.layers.some((x) => x.id === l.id)))}`;
+  if (a.layers.map((l) => l.id).join() !== b.layers.map((l) => l.id).join()) return 'Reorder layers';
+  const changed = b.layers.filter((l, i) => JSON.stringify(l) !== JSON.stringify(a.layers[i]));
+  if (changed.length) {
+    const prev = a.layers[b.layers.indexOf(changed[0])], keys = Object.keys(changed[0]).filter((k) => JSON.stringify(changed[0][k]) !== JSON.stringify(prev[k]));
+    const what = keys.every((k) => ['x', 'y', 'clip'].includes(k)) ? 'move' : keys.some((k) => ['w', 'h', 'size'].includes(k)) ? 'resize' : keys.includes('rot') ? 'rotate' : keys.join(', ');
+    return changed.length > 1 ? `${changed.length} layers: ${what}` : `${name(changed[0])}: ${what}`;
+  }
+  const k = Object.keys(b.theme).find((k) => a.theme[k] !== b.theme[k]) || Object.keys(b).find((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+  return NAMES[k] || k || 'Edit';
+}
+
+function syncHistory() { // newest first; click a row to go back (or forward) to it
+  const ol = $('#history'); ol.innerHTML = '';
+  hist.forEach((h, i) => {
+    const li = document.createElement('li');
+    li.textContent = h.label; li.className = i === hi ? 'cur' : i > hi ? 'future' : '';
+    li.onclick = () => jump(i);
+    ol.prepend(li);
+  });
+}
 
 const idb = new Promise((res, rej) => {
   const r = indexedDB.open('coverslip', 1);
@@ -486,7 +567,7 @@ let saveTimer;
 function autosave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => idbDo('readwrite', (s) => s.put(project(), 'autosave')).catch(console.warn), 800); }
 
 function project() {
-  const used = new Set([...S.layers.map((l) => l.asset), S.profile?.asset].filter(Boolean));
+  const used = new Set([...S.layers.map((l) => l.asset), ...S.fonts.map((f) => f.asset), S.profile?.asset].filter(Boolean));
   return { app: 'coverslip', version: 1, state: S, assets: Object.fromEntries([...used].map((id) => [id, assets[id].url])) };
 }
 
@@ -503,8 +584,10 @@ async function loadProject(p) { // p may come from someone else's file: only dat
   const d = defaults();
   S = { ...d, ...p.state, theme: { ...d.theme, ...p.state.theme } };
   if (!Array.isArray(S.layers)) S.layers = [];
-  cms = null; sel = null; snap = JSON.stringify(S); undos = []; redos = [];
-  syncUI(); render(); autosave();
+  S.fonts = (Array.isArray(S.fonts) ? S.fonts : []).filter((f) => typeof f?.name === 'string' && assets[f.asset]).map((f) => ({ name: cleanFont(f.name), asset: f.asset }));
+  await Promise.all(S.fonts.map((f) => registerFont(f).catch((err) => console.warn('font', f.name, err))));
+  cms = null; sels = [];
+  resetHistory('Opened'); syncUI(); render(); autosave();
 }
 
 function download(blob, name) {
@@ -518,19 +601,21 @@ const status = (s) => { $('#status').textContent = s; };
 
 // ---------- layers ----------
 
+function addLayer(l) { S.layers.push(l); sels = [l.id]; commit(); syncLayers(); render(); }
+
 async function addImage(file) {
   const id = uid();
   await loadAsset(id, await readAs(file, 'readAsDataURL'));
   const img = assets[id].img, f = F.panels.front;
   const w = f.w + 2 * B, h = w * img.height / img.width;
   const l = { id: uid(), type: 'image', asset: id, name: file.name, x: f.x + f.w / 2, y: f.y + f.h / 2, w, h, rot: 0, flipX: false, flipY: false, opacity: 1, blend: 'source-over', clip: 'front', visible: true, bri: 100, con: 100, sat: 100, gray: 0 };
-  S.layers.push(l); sel = l.id; commit(); syncLayers(); render();
+  addLayer(l);
 }
 
 function addText() {
   const f = F.panels.front;
   const l = { id: uid(), type: 'text', text: 'NEW TEXT', font: 'Bebas Neue', weight: 400, size: 14, color: '#ffffff', spacing: 0, x: f.x + f.w / 2, y: f.y + f.h / 2, rot: 0, opacity: 1, blend: 'source-over', clip: 'sheet', visible: true };
-  S.layers.push(l); sel = l.id; commit(); syncLayers(); render();
+  addLayer(l);
 }
 
 function syncLayers() {
@@ -538,45 +623,52 @@ function syncLayers() {
   if (!S.layers.length) ul.innerHTML = '<li class="empty">No layers — add an image or text, or drop files on the canvas.</li>';
   [...S.layers].reverse().forEach((l) => {
     const li = document.createElement('li'), i = S.layers.indexOf(l);
-    li.className = l.id === sel ? 'sel' : '';
+    li.className = sels.includes(l.id) ? 'sel' : '';
     li.innerHTML = '<input type="checkbox" title="Visible"><span></span><button title="Up">↑</button><button title="Down">↓</button><button title="Delete">✕</button>';
     const [vis, , up, down, del] = li.children;
     vis.checked = l.visible; li.children[1].textContent = l.type === 'image' ? `🖼 ${l.name}` : `T ${l.text.split('\n')[0] || '(empty)'}`;
     vis.onclick = (e) => { e.stopPropagation(); l.visible = vis.checked; commit(); render(); };
     const move = (d) => (e) => { e.stopPropagation(); const j = i + d; if (j < 0 || j >= S.layers.length) return; [S.layers[i], S.layers[j]] = [S.layers[j], S.layers[i]]; commit(); syncLayers(); render(); };
     up.onclick = move(1); down.onclick = move(-1);
-    del.onclick = (e) => { e.stopPropagation(); removeLayer(l); };
-    li.onclick = () => { sel = l.id; syncLayers(); render(); };
+    del.onclick = (e) => { e.stopPropagation(); removeLayers([l]); };
+    li.onclick = (e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleSel(l.id); else sels = [l.id]; syncLayers(); render(); };
     ul.append(li);
   });
   buildProps();
 }
 
-function removeLayer(l) { S.layers = S.layers.filter((x) => x !== l); if (sel === l.id) sel = null; commit(); syncLayers(); render(); }
+function removeLayers(ls) { S.layers = S.layers.filter((x) => !ls.includes(x)); sels = sels.filter((id) => S.layers.some((l) => l.id === id)); commit(); syncLayers(); render(); }
 
-const opts = (list, labels = list) => list.map((v, i) => `<option value="${v}">${labels[i]}</option>`).join('');
+const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const opts = (list, labels = list) => list.map((v, i) => `<option value="${esc(v)}">${esc(labels[i])}</option>`).join('');
 
 function buildProps() { // built on selection change; values filled by syncProps
-  const l = selected(), el = $('#props');
+  const ls = selection(), l = ls[0], el = $('#props');
   if (!l) { el.innerHTML = ''; return; }
   const num = (k, label, step = 0.5) => `<label>${label}<input type="number" step="${step}" data-p="${k}"></label>`;
   const range = (k, label, min, max, step = 1) => `<label>${label}<input type="range" min="${min}" max="${max}" step="${step}" data-p="${k}"></label>`;
+  const clip = `<label>Clip to<select data-p="clip">${opts(['sheet', ...Object.keys(F.panels)], ['Whole sheet', ...Object.keys(F.panels).map((k) => k[0].toUpperCase() + k.slice(1))])}</select></label>`;
+  const blend = `<label>Blend<select data-p="blend">${opts(BLENDS, ['normal', ...BLENDS.slice(1)])}</select></label>`;
+  if (ls.length > 1) { // several: just what makes sense for all of them at once
+    el.innerHTML = `<h2>${ls.length} layers</h2><p class="note">Drag or arrow-key them together; Delete removes them.</p>${range('opacity', 'Opacity', 0, 1, 0.01)}${blend}${clip}`;
+    return syncProps();
+  }
   el.innerHTML = `<h2>${l.type === 'image' ? 'Image' : 'Text'} layer</h2>
     ${l.type === 'text' ? `<label>Text<textarea rows="2" data-p="text"></textarea></label>
-      <div class="grid2"><label>Font<select data-p="font">${opts(FONTS)}</select></label><label>Weight<select data-p="weight">${opts(['400', '600', '800'])}</select></label>
-      ${num('size', 'Size mm')}${num('spacing', 'Spacing mm', 0.1)}<label>Colour<input type="color" data-p="color"></label></div>` : ''}
+      <div class="grid2"><label>Font<select data-p="font">${opts(allFonts())}</select></label><label>Weight<select data-p="weight">${opts(['400', '600', '800'])}</select></label>
+      ${num('size', 'Size mm')}${num('spacing', 'Spacing mm', 0.1)}<label>Colour<input type="color" data-p="color"></label><label>&nbsp;<button type="button" id="fontUp">Upload font…</button></label></div>` : ''}
     <div class="grid2">${num('x', 'X mm')}${num('y', 'Y mm')}
       ${l.type === 'image' ? num('w', 'W mm') + num('h', 'H mm') : ''}${num('rot', 'Rotate °', 1)}
-      <label>Clip to<select data-p="clip">${opts(['sheet', ...Object.keys(F.panels)], ['Whole sheet', ...Object.keys(F.panels).map((k) => k[0].toUpperCase() + k.slice(1))])}</select></label></div>
-    ${range('opacity', 'Opacity', 0, 1, 0.01)}
-    <label>Blend<select data-p="blend">${opts(BLENDS, ['normal', ...BLENDS.slice(1)])}</select></label>
+      ${clip}</div>
+    ${range('opacity', 'Opacity', 0, 1, 0.01)}${blend}
     ${l.type === 'image' ? `<div class="grid2"><label class="row"><input type="checkbox" data-p="flipX"> Flip H</label><label class="row"><input type="checkbox" data-p="flipY"> Flip V</label>
       ${range('bri', 'Brightness', 0, 200)}${range('con', 'Contrast', 0, 200)}${range('sat', 'Saturation', 0, 300)}${range('gray', 'Grayscale', 0, 100)}</div>` : ''}`;
+  $('#fontUp')?.addEventListener('click', () => $('#fontFile').click());
   syncProps();
 }
 
 function syncProps() {
-  const l = selected();
+  const l = selection()[0];
   if (!l) return;
   for (const i of $('#props').querySelectorAll('[data-p]')) {
     if (i === document.activeElement) continue;
@@ -586,15 +678,29 @@ function syncProps() {
 }
 
 $('#props').addEventListener('input', (e) => {
-  const l = selected(), t = e.target, k = t.dataset.p;
-  if (!l || !k) return;
-  l[k] = t.type === 'checkbox' ? t.checked : (t.type === 'number' || t.type === 'range' || k === 'weight') ? +t.value : t.value;
+  const ls = selection(), t = e.target, k = t.dataset.p;
+  if (!ls.length || !k) return;
+  for (const l of ls) l[k] = t.type === 'checkbox' ? t.checked : (t.type === 'number' || t.type === 'range' || k === 'weight') ? +t.value : t.value;
   if (k === 'text') syncLayerNames();
-  if (k === 'x' || k === 'y') { reclip(l); syncProps(); }
+  if (k === 'x' || k === 'y') { reclip(ls[0]); syncProps(); }
   render();
 });
 $('#props').addEventListener('change', commit);
 const syncLayerNames = () => { const t = $('#layers li.sel span'), l = selected(); if (t && l?.type === 'text') t.textContent = `T ${l.text.split('\n')[0] || '(empty)'}`; };
+
+// ---------- uploaded fonts ----------
+
+const allFonts = () => [...FONTS, ...S.fonts.map((f) => f.name).filter((n) => !FONTS.includes(n))];
+const cleanFont = (name) => name.replace(/["\\<>]/g, '').trim().slice(0, 60) || 'Custom font'; // it goes inside a CSS font string
+async function registerFont(f) { const ff = new FontFace(f.name, await (await fetch(assets[f.asset].url)).arrayBuffer()); document.fonts.add(await ff.load()); }
+async function uploadFont(file) {
+  const id = uid(), f = { name: cleanFont(file.name.replace(/\.[^.]+$/, '')), asset: id };
+  await loadAsset(id, await readAs(file, 'readAsDataURL'));
+  try { await registerFont(f); } catch { throw new Error(`"${file.name}" isn't a font this browser can read`); }
+  S.fonts = [...S.fonts.filter((x) => x.name !== f.name), f];
+  for (const l of selection()) if (l.type === 'text') l.font = f.name;
+  commit(); syncLayers(); render();
+}
 
 // ---------- theme + export panels ----------
 
@@ -611,7 +717,8 @@ for (const k of ['mirrorSpine', 'guides', 'dielineOnly']) $(`#${k}`).onchange = 
 $('#format').onchange = (e) => { S.format = e.target.value; syncUI(); commit(); render(); }; // syncUI may swap the paper: same undo step
 $('#splitLid').onchange = (e) => { S.splitLid = e.target.checked; if (S.splitLid) S.paper = 'A4'; syncUI(); commit(); render(); }; // the point of splitting is A4
 for (const k of ['jflap', 'jextra']) $(`#${k}`).onchange = (e) => { S[k] = +e.target.value; syncUI(); commit(); render(); };
-for (const k of ['paper', 'mode']) $(`#${k}`).onchange = (e) => { S[k] = e.target.value; commit(); };
+for (const k of ['paper', 'mode', 'pdfKind']) $(`#${k}`).onchange = (e) => { S[k] = e.target.value; commit(); };
+$('#intent').onchange = async (e) => { S.intent = +e.target.value; commit(); if (softProof) { await getCms(); render(); } };
 
 function syncUI() {
   geo();
@@ -625,10 +732,10 @@ function syncUI() {
   $('#preset').value = Object.keys(PALETTES).find((k) => PALETTES[k].join() === S.colors.join()) || '';
   for (const i of $('#fields').querySelectorAll('[data-k]')) if (i !== document.activeElement) i.value = S.theme[i.dataset.k] ?? '';
   for (const k of ['mirrorSpine', 'guides', 'dielineOnly']) $(`#${k}`).checked = S[k];
-  $('#paper').value = S.paper; $('#mode').value = S.mode;
+  $('#paper').value = S.paper; $('#mode').value = S.mode; $('#intent').value = S.intent; $('#pdfKind').value = S.pdfKind;
   $('#iccName').textContent = S.profile?.name || 'none';
   $('#iccName').className = S.profile ? '' : 'empty';
-  syncLayers();
+  syncLayers(); syncHistory();
 }
 
 // ---------- colour management (LittleCMS via WebAssembly, loaded on first use) ----------
@@ -645,7 +752,8 @@ function transform(lib, t, rgba, outCh) { // rgba → packed outCh bytes; chunke
 
 async function getCms() {
   if (!S.profile) throw new Error('Load a CMYK ICC profile first');
-  if (cms?.asset === S.profile.asset) return cms;
+  const key = `${S.profile.asset}|${S.intent}`;
+  if (cms?.key === key) return cms;
   const { m, lib } = await (lcmsP ??= import(LCMS_URL).then(async (m) => ({ m, lib: await m.instantiate() })));
   const bytes = new Uint8Array(await (await fetch(assets[S.profile.asset].url)).arrayBuffer());
   const prof = lib.cmsOpenProfileFromMem(bytes, bytes.length);
@@ -653,9 +761,9 @@ async function getCms() {
   const srgb = lib.cmsCreate_sRGBProfile();
   if (cms) { lib.cmsDeleteTransform(cms.toCmyk); lib.cmsDeleteTransform(cms.proof); }
   cms = {
-    asset: S.profile.asset, lib, bytes,
-    toCmyk: lib.cmsCreateTransform(srgb, m.TYPE_RGB_8, prof, m.TYPE_CMYK_8, m.INTENT_PERCEPTUAL, 0),
-    proof: lib.cmsCreateProofingTransform(srgb, m.TYPE_RGB_8, srgb, m.TYPE_RGB_8, prof, m.INTENT_PERCEPTUAL, m.INTENT_RELATIVE_COLORIMETRIC, m.cmsFLAGS_SOFTPROOFING),
+    key, lib, bytes, // S.intent is the ICC intent number: 0 perceptual, 1 relative, 2 saturation, 3 absolute colorimetric
+    toCmyk: lib.cmsCreateTransform(srgb, m.TYPE_RGB_8, prof, m.TYPE_CMYK_8, S.intent, 0),
+    proof: lib.cmsCreateProofingTransform(srgb, m.TYPE_RGB_8, srgb, m.TYPE_RGB_8, prof, S.intent, m.INTENT_RELATIVE_COLORIMETRIC, m.cmsFLAGS_SOFTPROOFING),
   };
   return cms;
 }
@@ -678,6 +786,14 @@ $('#softProof').onchange = async (e) => {
 
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.round(w); c.height = Math.round(h); return c; };
 
+function drawGlue(ctx, pc) { // tab hidden inside the box: leave it blank and say what it's for
+  const t = pc.glue;
+  ctx.fillStyle = '#fff'; ctx.fillRect(t.x - B - 1, t.y, t.w + 2 * B + 2, t.h + B + 1); // overshoot the bleed edge: no seam of body art
+  text(ctx, 'GLUE — fold down and stick inside the top of the box', t.x + t.w / 2, t.y + t.h / 2 + 1.1, 3, { weight: 600, color: '#999', align: 'center' });
+}
+
+const packRGB = (rgba) => { const out = new Uint8Array(rgba.length / 4 * 3); for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { out[j] = rgba[i]; out[j + 1] = rgba[i + 1]; out[j + 2] = rgba[i + 2]; } return out; };
+
 function renderPiece(dpi, paper, pc) { // one printed sheet: piece pc of the current format, centred on paper (null = bleed box)
   const s = dpi / 25.4, bw = pc.w + 2 * B, bh = pc.h + 2 * B, pw = paper?.w || bw, ph = paper?.h || bh;
   const g = { cut: new Path2D(pc.cut), slits: new Path2D(pc.slits), folds: new Path2D(pc.folds) };
@@ -685,11 +801,7 @@ function renderPiece(dpi, paper, pc) { // one printed sheet: piece pc of the cur
   px.fillStyle = '#fff'; px.fillRect(0, 0, page.width, page.height);
   const art = mk(bw * s, bh * s), ac = art.getContext('2d'), toPiece = [s, 0, 0, s, s * (B - pc.x), s * (B - pc.y)];
   ac.setTransform(...toPiece); drawContent(ac);
-  if (pc.glue) { // tab hidden inside the box: leave it blank and say what it's for
-    const t = pc.glue;
-    ac.fillStyle = '#fff'; ac.fillRect(t.x - B, t.y, t.w + 2 * B, t.h + B);
-    text(ac, 'GLUE — fold down and stick inside the top of the box', t.x + t.w / 2, t.y + t.h / 2 + 1.1, 3, { weight: 600, color: '#999', align: 'center' });
-  }
+  if (pc.glue) drawGlue(ac, pc);
   if (!S.dielineOnly) { // trim everything outside cut line + bleed
     const m = mk(art.width, art.height), mc = m.getContext('2d');
     mc.setTransform(...toPiece); mc.fill(g.cut); mc.lineWidth = 2 * B; mc.lineJoin = 'round'; mc.stroke(g.cut);
@@ -702,6 +814,7 @@ function renderPiece(dpi, paper, pc) { // one printed sheet: piece pc of the cur
 }
 
 async function exportPdf() {
+  if (S.pdfKind === 'vector') return exportVector();
   status('Rendering 300 DPI…'); await document.fonts.ready; await tick();
   geo();
   const cmyk = S.mode === 'cmyk', c = cmyk ? await getCms() : null, paper = PAPERS.find((p) => p.name === S.paper), pt = 72 / 25.4, pages = [];
@@ -709,12 +822,61 @@ async function exportPdf() {
     const { page, pw, ph } = renderPiece(300, paper, pc);
     const rgba = page.getContext('2d').getImageData(0, 0, page.width, page.height).data;
     status(cmyk ? 'Converting to CMYK…' : 'Compressing…'); await tick();
-    let pixels;
-    if (cmyk) pixels = transform(c.lib, c.toCmyk, rgba, 4);
-    else { pixels = new Uint8Array(rgba.length / 4 * 3); for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) { pixels[j] = rgba[i]; pixels[j + 1] = rgba[i + 1]; pixels[j + 2] = rgba[i + 2]; } }
-    pages.push({ wPt: +(pw * pt).toFixed(2), hPt: +(ph * pt).toFixed(2), width: page.width, height: page.height, pixels });
+    const pixels = cmyk ? transform(c.lib, c.toCmyk, rgba, 4) : packRGB(rgba), wPt = +(pw * pt).toFixed(2), hPt = +(ph * pt).toFixed(2);
+    pages.push({ wPt, hPt, content: `q ${wPt} 0 0 ${hPt} 0 0 cm /Im0 Do Q`, images: { Im0: { width: page.width, height: page.height, pixels, cmyk } } });
   }
-  download(await pdf({ pages, cmyk, icc: c?.bytes }), fileName('pdf'));
+  download(await pdf({ pages, icc: c?.bytes }), fileName('pdf'));
+  status('');
+}
+
+// ---------- vector PDF: same drawing code, run against PdfCtx; text as outlines via opentype.js ----------
+
+let otP;
+const otFonts = new Map(); // `${family}|${weight}` → opentype Font
+async function loadOT(family, weight) {
+  const key = `${family}|${weight}`;
+  if (otFonts.has(key)) return;
+  const m = await (otP ??= import(OT_URL)), up = S.fonts.find((f) => f.name === family);
+  let buf;
+  if (up) buf = await (await fetch(assets[up.asset].url)).arrayBuffer();
+  else for (const w of [weight, 400]) { // single-weight fonts only have 400
+    const slug = family.toLowerCase().replace(/ /g, '-'), r = await fetch(WOFF(slug, w));
+    if (r.ok) { buf = await r.arrayBuffer(); break; }
+  }
+  if (!buf) throw new Error(`Couldn't load "${family}" for vector export (offline?)`);
+  try { otFonts.set(key, (m.parse ?? m.default.parse)(buf)); }
+  catch { throw new Error(`"${family}" can't be turned into outlines — WOFF2 isn't supported; upload it as TTF, OTF or WOFF`); }
+}
+
+async function exportVector() {
+  status('Building vector PDF…'); await document.fonts.ready; await tick();
+  geo();
+  const cmyk = S.mode === 'cmyk', c = cmyk ? await getCms() : null;
+  await Promise.all([400, 500, 600, 700, 800].map((w) => loadOT('Montserrat', w)).concat(
+    S.layers.filter((l) => l.type === 'text' && l.visible).map((l) => loadOT(l.font, l.weight))));
+  const font = (family, weight) => otFonts.get(`${family}|${weight}`) || otFonts.get(`${family}|400`) || otFonts.get('Montserrat|400');
+  const cache = new Map(), color = (rgb) => { // CMYK: convert each flat colour once through the ICC transform
+    if (!cmyk) return { v: rgb.map((v) => +v.toFixed(4)).join(' '), op: 'rg' };
+    const key = rgb.join();
+    if (!cache.has(key)) cache.set(key, { v: [...transform(c.lib, c.toCmyk, new Uint8ClampedArray([...rgb.map((v) => Math.round(v * 255)), 255]), 4)].map((v) => +(v / 255).toFixed(4)).join(' '), op: 'k' });
+    return cache.get(key);
+  };
+  const pixels = (rgba) => ({ data: cmyk ? transform(c.lib, c.toCmyk, rgba, 4) : packRGB(rgba), cmyk });
+  const paper = PAPERS.find((p) => p.name === S.paper), k = 72 / 25.4, pages = [];
+  for (const pc of pieces(F)) {
+    const bw = pc.w + 2 * B, bh = pc.h + 2 * B, pw = paper?.w || bw, ph = paper?.h || bh, ox = (pw - bw) / 2, oy = (ph - bh) / 2;
+    const ctx = new PdfCtx({ font, color, pixels });
+    ctx.transform(k, 0, 0, -k, 0, ph * k); // PDF points, y up → mm, y down
+    ctx.translate(ox + B - pc.x, oy + B - pc.y);
+    ctx.save(); ctx.beginPath(); ctx.rect(pc.x - B, pc.y - B, bw, bh); ctx.clip(); // ponytail: trimmed to the bleed box, not the die shape
+    drawContent(ctx);
+    if (pc.glue) drawGlue(ctx, pc);
+    ctx.restore();
+    if (S.guides || S.dielineOnly) drawGuides(ctx, 0.2, { cut: pc.cut, slits: pc.slits, folds: pc.folds });
+    pages.push({ wPt: +(pw * k).toFixed(2), hPt: +(ph * k).toFixed(2), content: ctx.ops.join('\n'), images: ctx.images, gstates: ctx.gstates, group: cmyk ? '/DeviceCMYK' : '/DeviceRGB' });
+  }
+  status('Compressing…'); await tick();
+  download(await pdf({ pages, icc: c?.bytes }), fileName('pdf'));
   status('');
 }
 
@@ -744,6 +906,7 @@ $('#open').onclick = () => $('#projFile').click();
 $('#projFile').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadProject(JSON.parse(await f.text())); });
 $('#new').onclick = () => { if (confirm('Start a new cover? Unsaved changes will be lost.')) loadProject({ app: 'coverslip', state: defaults(), assets: {} }); };
 $('#loadIcc').onclick = () => $('#iccFile').click();
+$('#fontFile').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await uploadFont(f); });
 $('#iccFile').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadProfile(f); });
 
 stage.addEventListener('dragover', (e) => e.preventDefault());
@@ -753,6 +916,7 @@ stage.addEventListener('drop', guard(async (e) => {
     if (f.type.startsWith('image/')) await addImage(f);
     else if (/\.json$/i.test(f.name)) await loadProject(JSON.parse(await f.text()));
     else if (/\.ic[cm]$/i.test(f.name)) await loadProfile(f);
+    else if (/\.(ttf|otf|woff2?)$/i.test(f.name)) await uploadFont(f);
   }
 }));
 
@@ -763,15 +927,19 @@ addEventListener('keydown', (e) => {
     if (typing) return; // let the field do its own undo
     e.preventDefault(); (e.shiftKey || e.key === 'y') ? redo() : undo(); return;
   }
-  const l = selected();
-  if (typing || !l) return;
+  if (typing) return;
+  if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); sels = S.layers.filter((l) => l.visible).map((l) => l.id); syncLayers(); render(); return; }
+  const ls = selection();
+  if (!ls.length) return;
   const d = e.shiftKey ? 10 : 1, moves = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d] };
-  if (moves[e.key]) { e.preventDefault(); l.x += moves[e.key][0]; l.y += moves[e.key][1]; reclip(l); commit(); syncProps(); render(); }
-  else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeLayer(l); }
-  else if (e.key === 'Escape') { sel = null; syncLayers(); render(); }
+  if (moves[e.key]) { e.preventDefault(); for (const l of ls) { l.x += moves[e.key][0]; l.y += moves[e.key][1]; reclip(l); } commit(); syncProps(); render(); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeLayers(ls); }
+  else if (e.key === 'Escape') { sels = []; syncLayers(); render(); }
 });
 
 // ---------- start ----------
+
+resetHistory('Start');
 
 await Promise.all(FONTS.flatMap((f) => ['400', '500', '600', '700', '800'].map((w) => document.fonts.load(`${w} 16px "${f}"`)))).catch(() => status('Fonts failed to load (offline?)'));
 try { const saved = await idbDo('readonly', (s) => s.get('autosave')); if (saved) await loadProject(saved); } catch (err) { console.warn('autosave not restored', err); }

@@ -24,15 +24,19 @@ You need to be online for Google Fonts and for the colour-management library (lo
 
 - **Theme:** edit the text fields and palette in the left panel. Clearing a field hides that element.
 - **Layers:** use `+ Image` / `+ Text`, or drop image files onto the canvas.
+  - Shift/⌘-click (canvas or layer list) to select several; ⌘/Ctrl+A selects all. Several selected layers move, nudge, delete and take opacity/blend/clip together.
+  - Dragging snaps to panel edges and centres, folds, trim, bleed and other layers (magenta guide lines). Hold Alt to place freely.
   - Click to select a layer and drag to move it.
   - Drag a corner handle to scale (hold Shift for free aspect ratio on images).
   - Drag the round handle to rotate (hold Shift to snap to 15°).
   - Arrow keys nudge by 1 mm (Shift for 10 mm). Delete/Backspace removes the layer.
   - "Clip to" keeps a layer inside one panel.
 - **View:** scroll to pan, ⌘/Ctrl + scroll to zoom, and drag an empty area to pan.
-- **Undo:** ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Shift+Z to redo.
+- **Undo:** ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Shift+Z to redo. The **History** panel (bottom right) lists the last 50 steps; click one to jump there.
+- **Fonts:** 8 Google fonts built in. "Upload font…" in a text layer's properties (or drop a `.ttf`/`.otf`/`.woff` on the canvas) adds your own; it's saved inside the project file.
 - **Save / Open:** a `.coverslip.json` file with the images embedded. Work also autosaves in the browser.
-- **CMYK:** load the ICC profile your print shop asks for (for example ISO Coated v2 / FOGRA39 from [eci.org](https://www.eci.org/en/downloads)) and choose CMYK. "Soft proof" previews the result on screen. No profile ships with the app, because the ECI profiles can't be redistributed without permission.
+- **PDF type:** *Raster* (300 DPI, exactly what you see) or *Vector* (text and shapes stay as sharp outlines, photos are embedded at full resolution, blend modes carry over). Vector output is trimmed to the bleed box, not the die shape. For vector export, uploaded fonts must be TTF, OTF or WOFF (not WOFF2).
+- **CMYK:** choose a rendering intent (perceptual by default) and load the ICC profile your print shop asks for (for example ISO Coated v2 / FOGRA39 from [eci.org](https://www.eci.org/en/downloads)) and choose CMYK. "Soft proof" previews the result on screen. No profile ships with the app, because the ECI profiles can't be redistributed without permission.
 
 ## Print
 

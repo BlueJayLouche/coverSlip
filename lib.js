@@ -90,28 +90,70 @@ export const fits = (p, fmt = VHS) => pieces(fmt).every((pc) => p.w >= pc.w + 2 
 const deflate = async (u8) =>
   new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
 
-// Minimal PDF, one full-page image per page. pages: [{ wPt, hPt, width, height, pixels }], pixels packed
-// RGB or CMYK bytes. icc (CMYK only): profile bytes, embedded once as the images' ICCBased colour space.
-export async function pdf({ pages, cmyk, icc }) {
-  const enc = (s) => new TextEncoder().encode(s);
-  const n = pages.length, iccId = 3 + 3 * n; // objects: 1 catalog, 2 page tree, then page/content/image per page, then icc
-  const cs = cmyk ? (icc ? `[/ICCBased ${iccId} 0 R]` : '/DeviceCMYK') : '/DeviceRGB';
-  const objs = [
-    ['<< /Type /Catalog /Pages 2 0 R >>'],
-    [`<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + 3 * i} 0 R`).join(' ')}] /Count ${n} >>`],
-  ];
-  for (const [i, p] of pages.entries()) {
-    const id = 3 + 3 * i, img = await deflate(p.pixels), content = `q ${p.wPt} 0 0 ${p.hPt} 0 0 cm /Im0 Do Q`;
-    objs.push(
-      [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.wPt} ${p.hPt}] /Resources << /XObject << /Im0 ${id + 2} 0 R >> >> /Contents ${id + 1} 0 R >>`],
-      [`<< /Length ${content.length} >>\nstream\n${content}\nendstream`],
-      [`<< /Type /XObject /Subtype /Image /Width ${p.width} /Height ${p.height} /ColorSpace ${cs} /BitsPerComponent 8 /Filter /FlateDecode /Length ${img.length} >>\nstream\n`, img, '\nendstream'],
-    );
+const num = (v) => +v.toFixed(3);
+
+// Canvas-style arc → cubic Béziers. da = signed sweep (radians, y-down so + is clockwise on screen).
+export function arcBeziers(cx, cy, r, a0, da) {
+  const n = Math.max(1, Math.ceil(Math.abs(da) / (Math.PI / 2) - 1e-9)), step = da / n, k = 4 / 3 * Math.tan(step / 4), segs = [];
+  for (let i = 0; i < n; i++) {
+    const t0 = a0 + i * step, t1 = t0 + step, c0 = Math.cos(t0), s0 = Math.sin(t0), c1 = Math.cos(t1), s1 = Math.sin(t1);
+    segs.push([cx + r * (c0 - k * s0), cy + r * (s0 + k * c0), cx + r * (c1 + k * s1), cy + r * (s1 - k * c1), cx + r * c1, cy + r * s1]);
   }
-  if (cmyk && icc) {
-    const p = await deflate(icc);
-    objs.push([`<< /N 4 /Alternate /DeviceCMYK /Filter /FlateDecode /Length ${p.length} >>\nstream\n`, p, '\nendstream']);
+  return { start: [cx + r * Math.cos(a0), cy + r * Math.sin(a0)], segs };
+}
+
+// SVG path data (the subset the dielines use: M L H V A Z, absolute or relative; circular arcs) → PDF path operators.
+export function svgToPdf(d) {
+  const t = d.match(/[MLHVAZmlhvaz]|-?[\d.]+(?:e-?\d+)?/g) || [], out = [];
+  let i = 0, x = 0, y = 0, sx = 0, sy = 0, cmd = '';
+  const n = () => +t[i++];
+  while (i < t.length) {
+    if (/[a-z]/i.test(t[i])) cmd = t[i++];
+    const rel = cmd === cmd.toLowerCase() && cmd !== 'z', C = cmd.toUpperCase(), ox = rel ? x : 0, oy = rel ? y : 0;
+    if (C === 'M') { x = ox + n(); y = oy + n(); sx = x; sy = y; out.push(`${num(x)} ${num(y)} m`); cmd = rel ? 'l' : 'L'; }
+    else if (C === 'L') { x = ox + n(); y = oy + n(); out.push(`${num(x)} ${num(y)} l`); }
+    else if (C === 'H') { x = ox + n(); out.push(`${num(x)} ${num(y)} l`); }
+    else if (C === 'V') { y = oy + n(); out.push(`${num(x)} ${num(y)} l`); }
+    else if (C === 'Z') { x = sx; y = sy; out.push('h'); }
+    else if (C === 'A') { // circular arcs only (rx = ry, no rotation) — all the dielines need
+      let r = n(); n(); n(); const fa = n(), fs = n(), x2 = ox + n(), y2 = oy + n();
+      const dx = (x - x2) / 2, dy = (y - y2) / 2, d2 = dx * dx + dy * dy;
+      r = Math.max(r, Math.sqrt(d2));
+      const f = Math.sqrt(Math.max(0, (r * r - d2) / d2)) * (fa === fs ? -1 : 1), cx = f * dy + (x + x2) / 2, cy = -f * dx + (y + y2) / 2;
+      const a0 = Math.atan2(y - cy, x - cx);
+      let da = Math.atan2(y2 - cy, x2 - cx) - a0;
+      if (fs && da < 0) da += 2 * Math.PI; else if (!fs && da > 0) da -= 2 * Math.PI;
+      for (const s of arcBeziers(cx, cy, r, a0, da).segs) out.push(`${s.map(num).join(' ')} c`);
+      x = x2; y = y2;
+    } else throw new Error(`svgToPdf: unsupported "${cmd}"`);
   }
+  return out.join(' ');
+}
+
+// Minimal PDF writer. pages: [{ wPt, hPt, content, images?, gstates?, group? }]
+//   content: page content stream (PDF operators); images: { Name: { width, height, pixels, cmyk?, smask? } }
+//   (pixels packed RGB or CMYK, smask = 8-bit alpha); gstates: { Name: '<< … >>' }; group: transparency group colour space.
+// icc: CMYK profile bytes, embedded once as the CMYK images' ICCBased colour space.
+export async function pdf({ pages, icc }) {
+  const enc = (s) => new TextEncoder().encode(s), objs = [];
+  const add = (...parts) => (objs.push(parts), objs.length);
+  const stream = async (dict, data) => { const z = await deflate(data); return add(`<< ${dict} /Filter /FlateDecode /Length ${z.length} >>\nstream\n`, z, '\nendstream'); };
+  add('<< /Type /Catalog /Pages 2 0 R >>'); add(); // 2 = page tree, filled in once the pages exist
+  const iccId = icc ? await stream('/N 4 /Alternate /DeviceCMYK', icc) : 0;
+  const kids = [];
+  for (const p of pages) {
+    const xo = [];
+    for (const [name, im] of Object.entries(p.images || {})) {
+      const head = `/Type /XObject /Subtype /Image /Width ${im.width} /Height ${im.height} /BitsPerComponent 8`;
+      const cs = im.cmyk ? (iccId ? `[/ICCBased ${iccId} 0 R]` : '/DeviceCMYK') : '/DeviceRGB';
+      const sm = im.smask ? await stream(`${head} /ColorSpace /DeviceGray`, im.smask) : 0;
+      xo.push(`/${name} ${await stream(`${head} /ColorSpace ${cs}${sm ? ` /SMask ${sm} 0 R` : ''}`, im.pixels)} 0 R`);
+    }
+    const gs = Object.entries(p.gstates || {}).map(([n, d]) => `/${n} ${d}`).join(' ');
+    const content = await stream('', enc(p.content));
+    kids.push(add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.wPt} ${p.hPt}] /Resources << /XObject << ${xo.join(' ')} >> /ExtGState << ${gs} >> >> /Contents ${content} 0 R${p.group ? ` /Group << /S /Transparency /CS ${p.group} >>` : ''} >>`));
+  }
+  objs[1] = [`<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`];
   const parts = [], offsets = [];
   let pos = 0;
   const put = (x) => { const u = typeof x === 'string' ? enc(x) : x; parts.push(u); pos += u.length; };
