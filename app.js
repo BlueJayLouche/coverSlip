@@ -286,6 +286,11 @@ const rotp = (p, deg) => { const a = deg * Math.PI / 180; return { x: p.x * Math
 const toLocal = (l, p) => rotp({ x: p.x - l.x, y: p.y - l.y }, -l.rot);
 const toWorld = (l, p) => { const q = rotp(p, l.rot); return { x: l.x + q.x, y: l.y + q.y }; };
 const selected = () => S.layers.find((l) => l.id === sel) || null;
+function reclip(l) { // a panel-clipped layer moved onto another panel follows it, instead of vanishing
+  if (l.clip === 'sheet') return;
+  const hit = Object.entries(VHS.panels).find(([, p]) => l.x >= p.x && l.x < p.x + p.w && l.y >= p.y && l.y < p.y + p.h);
+  if (hit) l.clip = hit[0];
+}
 
 function handles(l) { // screen-space positions of the corner (scale) and rotate handles
   const [w, h] = layerSize(l);
@@ -343,7 +348,7 @@ cv.addEventListener('pointermove', (e) => {
   if (!drag) return;
   const m = toMm(e), l = selected(), o = drag.l;
   if (drag.mode === 'pan') { view.x = drag.vx + e.clientX - drag.sx; view.y = drag.vy + e.clientY - drag.sy; }
-  else if (drag.mode === 'move') { l.x = o.x + m.x - drag.m.x; l.y = o.y + m.y - drag.m.y; }
+  else if (drag.mode === 'move') { l.x = o.x + m.x - drag.m.x; l.y = o.y + m.y - drag.m.y; reclip(l); }
   else if (drag.mode === 'rotate') {
     let a = Math.atan2(m.y - o.y, m.x - o.x) * 180 / Math.PI + 90;
     if (e.shiftKey) a = Math.round(a / 15) * 15;
@@ -500,6 +505,7 @@ $('#props').addEventListener('input', (e) => {
   if (!l || !k) return;
   l[k] = t.type === 'checkbox' ? t.checked : (t.type === 'number' || t.type === 'range' || k === 'weight') ? +t.value : t.value;
   if (k === 'text') syncLayerNames();
+  if (k === 'x' || k === 'y') { reclip(l); syncProps(); }
   render();
 });
 $('#props').addEventListener('change', commit);
@@ -652,7 +658,7 @@ addEventListener('keydown', (e) => {
   const l = selected();
   if (typing || !l) return;
   const d = e.shiftKey ? 10 : 1, moves = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d] };
-  if (moves[e.key]) { e.preventDefault(); l.x += moves[e.key][0]; l.y += moves[e.key][1]; commit(); syncProps(); render(); }
+  if (moves[e.key]) { e.preventDefault(); l.x += moves[e.key][0]; l.y += moves[e.key][1]; reclip(l); commit(); syncProps(); render(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeLayer(l); }
   else if (e.key === 'Escape') { sel = null; syncLayers(); render(); }
 });
