@@ -1,4 +1,4 @@
-import { VHS, BLEED as B, PAPERS, pdf } from './lib.js';
+import { VHS, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
 
 const LCMS_URL = 'https://cdn.jsdelivr.net/npm/lcms-wasm@1.0.5/dist/lcms.js';
 const FONTS = ['Montserrat', 'Bebas Neue', 'Righteous', 'Monoton', 'VT323', 'Press Start 2P', 'Russo One', 'Permanent Marker'];
@@ -23,9 +23,9 @@ const FIELDS = [ // key, label, default, multiline
   ['spineTitle', 'Spine title', 'E-240'],
   ['spineSub', 'Spine subtitle', 'VIDEO CASSETTE'],
   ['badges', 'Badges (comma-separated)', 'VHS, HQ, HI-FI'],
-  ['backTitle', 'Back title', 'CONTENTS'],
+  ['backTitle', 'Back title / J-card fold-out heading', 'CONTENTS'],
   ['backSub', 'Back corner text', 'SIDE A'],
-  ['bullets', 'Back paragraphs (one per line)', 'Birthday party at the lake house, grandma on the swing.\nFirst day of school, the new bike, the dog in the sprinkler.\nChristmas morning 1989 until the tape runs out.', true],
+  ['bullets', 'Back paragraphs / J-card fold-out list (one per line)', 'Birthday party at the lake house, grandma on the swing.\nFirst day of school, the new bike, the dog in the sprinkler.\nChristmas morning 1989 until the tape runs out.', true],
   ['recHeading', 'Table heading', 'RECORDING TIME'],
   ['sp', 'SP mode', '120 MIN'],
   ['lp', 'LP mode', '240 MIN'],
@@ -35,6 +35,7 @@ const FIELDS = [ // key, label, default, multiline
 const defaults = () => ({
   theme: Object.fromEntries(FIELDS.map((f) => [f[0], f[2]])),
   colors: [...PALETTES.Rainbow], mirrorSpine: true, layers: [],
+  format: 'vhs', jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
   paper: 'A3', mode: 'rgb', guides: true, dielineOnly: false, profile: null, // profile: { name, asset }
 });
 
@@ -45,8 +46,17 @@ let softProof = false, cms = null, lcmsP = null;
 const view = { s: 1, x: 0, y: 0, fit: 1 }; // css px per mm, offset of bleed-box origin
 const $ = (q) => document.querySelector(q);
 const uid = () => Math.random().toString(36).slice(2, 10);
-const CUT = new Path2D(VHS.cut), SLITS = new Path2D(VHS.slits), FOLDS = new Path2D(VHS.folds);
-const AW = VHS.w + 2 * B, AH = VHS.h + 2 * B; // bleed box
+const O = 10; // theme shapes overdraw this far past panel edges; the panel clip trims them
+let F, CUT, SLITS, FOLDS, AW, AH, geoKey, refit; // current format's geometry; AW × AH = bleed box
+function geo() { // rebuild when the format settings change
+  S.jflap = Math.min(40, Math.max(10, +S.jflap || 15.9)); S.jextra = Math.min(3, Math.max(0, Math.round(+S.jextra) || 0));
+  const k = `${S.format}|${S.jflap}|${S.jextra}`;
+  if (k === geoKey) return;
+  geoKey = k; refit = true; F = S.format === 'jcard' ? jcard(S.jflap, S.jextra) : VHS;
+  CUT = new Path2D(F.cut); SLITS = new Path2D(F.slits); FOLDS = new Path2D(F.folds);
+  AW = F.w + 2 * B; AH = F.h + 2 * B;
+}
+geo();
 const mctx = document.createElement('canvas').getContext('2d'); // for measuring text
 
 // ---------- drawing (ctx units = mm, origin = dieline top-left) ----------
@@ -62,14 +72,14 @@ function text(ctx, str, x, y, size, { weight = 800, color, maxW = Infinity, alig
   ctx.letterSpacing = '0px';
 }
 
-function wrap(ctx, str, x, y, maxW, size, lh, color, weight = 500) {
+function wrap(ctx, str, x, y, maxW, size, lh, color, weight = 500, maxY = Infinity) { // stops at maxY
   ctx.font = `${weight} ${size}px Montserrat`; ctx.fillStyle = color; ctx.textAlign = 'left';
   let line = '';
   for (const word of str.split(/\s+/)) {
     const t = line ? `${line} ${word}` : word;
-    if (line && ctx.measureText(t).width > maxW) { ctx.fillText(line, x, y); y += lh; line = word; } else line = t;
+    if (line && ctx.measureText(t).width > maxW) { if (y > maxY) return y; ctx.fillText(line, x, y); y += lh; line = word; } else line = t;
   }
-  if (line) { ctx.fillText(line, x, y); y += lh; }
+  if (line && y <= maxY) { ctx.fillText(line, x, y); y += lh; }
   return y;
 }
 
@@ -95,7 +105,7 @@ function barcode(ctx, num, x, y, w, h, color) { // decorative, not a scannable U
 }
 
 function ext(p) { // panel rect, grown by the bleed on edges that aren't shared with a neighbour
-  const last = VHS.panels.back;
+  const last = Object.values(F.panels).at(-1);
   const x0 = p.x === 0 ? -B : p.x, x1 = p.x + p.w + (p === last ? B : 0);
   return { x: x0, y: p.y - B, w: x1 - x0, h: p.h + 2 * B };
 }
@@ -112,30 +122,31 @@ const FRONT = (W, H) => ({ sw: 4, Xs: W - 26, Ys: H * 0.64, R: 22 });
 function frontShapes(ctx, W, H) {
   const { s, dark } = col(), { sw, Xs, Ys, R } = FRONT(W, H);
   ctx.fillStyle = dark; ctx.beginPath(); // dark window, rounded bottom-right corner
-  ctx.moveTo(-B, -B); ctx.lineTo(Xs, -B); ctx.lineTo(Xs, Ys - R); ctx.arc(Xs - R, Ys - R, R, 0, Math.PI / 2); ctx.lineTo(-B, Ys); ctx.fill();
+  ctx.moveTo(-O, -O); ctx.lineTo(Xs, -O); ctx.lineTo(Xs, Ys - R); ctx.arc(Xs - R, Ys - R, R, 0, Math.PI / 2); ctx.lineTo(-O, Ys); ctx.fill();
   s.forEach((c, i) => { // stripe band hugging the window: in from the left, round the corner, up and out the top
     const d = i * sw + sw / 2;
     ctx.strokeStyle = c; ctx.lineWidth = sw + 0.1; ctx.beginPath();
-    ctx.moveTo(-B, Ys + d); ctx.lineTo(Xs - R, Ys + d); ctx.arc(Xs - R, Ys - R, R + d, Math.PI / 2, 0, true); ctx.lineTo(Xs + d, -B); ctx.stroke();
+    ctx.moveTo(-O, Ys + d); ctx.lineTo(Xs - R, Ys + d); ctx.arc(Xs - R, Ys - R, R + d, Math.PI / 2, 0, true); ctx.lineTo(Xs + d, -O); ctx.stroke();
   });
-  ctx.fillStyle = dark; ctx.fillRect(-B, H - 24, W + 2 * B, 14); // footer bar
-  s.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-B, H - 22 + i * 2.2, 36 + B, 1); });
+  ctx.fillStyle = dark; ctx.fillRect(-O, H - 24, W + 2 * O, 14); // footer bar
+  s.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-O, H - 22 + i * 2.2, 36 + O, 1); });
 }
 
 function frontText(ctx, W, H) {
   const { s, dark, light } = col(), { Xs, Ys } = FRONT(W, H), t = S.theme;
   text(ctx, t.title, 7, 30, 24, { color: light, maxW: Xs - 12 });
   if (t.subtitle) {
-    ctx.fillStyle = light; ctx.fillRect(-B, 37, Xs - 4 + B, 8);
-    ctx.fillStyle = s[2]; ctx.fillRect(-B, 45, Xs - 4 + B, 1.2);
+    ctx.fillStyle = light; ctx.fillRect(-O, 37, Xs - 4 + O, 8);
+    ctx.fillStyle = s[2]; ctx.fillRect(-O, 45, Xs - 4 + O, 1.2);
     text(ctx, t.subtitle, 7, 42.8, 4.6, { weight: 700, color: dark, maxW: Xs - 14 });
   }
-  text(ctx, t.tagline, 7, 62, 11, { color: light, maxW: Xs - 14 });
+  const compact = H < 170; // J-card front: less room between the subtitle bar and the label
+  text(ctx, t.tagline, 7, compact ? 57 : 62, compact ? 8 : 11, { color: light, maxW: Xs - 14 });
   text(ctx, t.label, 7, Ys - 32, 13, { color: light, maxW: Xs - 14 });
-  if (t.label) { ctx.fillStyle = light; ctx.fillRect(-B, Ys - 29, 52 + B, 0.4); }
+  if (t.label) { ctx.fillStyle = light; ctx.fillRect(-O, Ys - 29, 52 + O, 0.4); }
   text(ctx, t.line1, 7, Ys - 22, 4, { weight: 500, color: light, maxW: Xs - 14 });
   text(ctx, t.line2, 7, Ys - 16, 4, { weight: 500, color: light, maxW: Xs - 14 });
-  if (t.blurb) wrap(ctx, t.blurb, 8, Ys + 28, W - 16, 2.8, 3.8, dark);
+  if (t.blurb) wrap(ctx, t.blurb, 8, Ys + 28, W - 16, 2.8, 3.8, dark, 500, H - 27);
   text(ctx, t.brand, W - 6, H - 16.3, 6, { color: light, align: 'right', maxW: W - 50 });
   text(ctx, t.brand2, W - 6, H - 12, 2.8, { weight: 500, color: light, align: 'right', spacing: 0.8, maxW: W - 50 });
 }
@@ -144,12 +155,12 @@ function spineShapes(ctx, w, h, plain) {
   const { s, dark } = col();
   for (let i = 0; i < 5; i++) { // stripe caps, purple on the outside
     ctx.fillStyle = s[4 - i];
-    ctx.fillRect(-B, i ? i * 3 : -B, w + 2 * B, i ? 3 : 3 + B);
-    ctx.fillRect(-B, h - (i + 1) * 3, w + 2 * B, i ? 3 : 3 + B);
+    ctx.fillRect(-O, i ? i * 3 : -O, w + 2 * O, i ? 3 : 3 + O);
+    ctx.fillRect(-O, h - (i + 1) * 3, w + 2 * O, i ? 3 : 3 + O);
   }
   if (plain) return;
-  ctx.fillStyle = s[2]; ctx.fillRect(-B, 40, w + 2 * B, 1.5); ctx.fillRect(-B, h - 41.5, w + 2 * B, 1.5);
-  ctx.fillStyle = dark; ctx.fillRect(-B, 42, w + 2 * B, h - 84);
+  ctx.fillStyle = s[2]; ctx.fillRect(-O, 40, w + 2 * O, 1.5); ctx.fillRect(-O, h - 41.5, w + 2 * O, 1.5);
+  ctx.fillStyle = dark; ctx.fillRect(-O, 42, w + 2 * O, h - 84);
 }
 
 function spineText(ctx, w, h) {
@@ -166,8 +177,8 @@ const BACK = (H) => H * 0.56;
 
 function backShapes(ctx, W, H) {
   const { s, dark } = col(), Yd = BACK(H);
-  ctx.fillStyle = dark; ctx.fillRect(-B, -B, W + 2 * B, 30 + B); ctx.fillRect(-B, Yd, W + 2 * B, H - Yd + B);
-  s.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-B, 30 + i * 1.5, W + 2 * B, 1.5); ctx.fillRect(-B, Yd - 12.5 + i * 2.5, W + 2 * B, 2.5); });
+  ctx.fillStyle = dark; ctx.fillRect(-O, -O, W + 2 * O, 30 + O); ctx.fillRect(-O, Yd, W + 2 * O, H - Yd + O);
+  s.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-O, 30 + i * 1.5, W + 2 * O, 1.5); ctx.fillRect(-O, Yd - 12.5 + i * 2.5, W + 2 * O, 2.5); });
 }
 
 function backText(ctx, W, H) {
@@ -200,7 +211,73 @@ function backText(ctx, W, H) {
   if (t.barcode) barcode(ctx, t.barcode, W - 38, H - 30, 30, 13, light);
 }
 
-function panelRect(clip) { return clip === 'sheet' ? null : ext(VHS.panels[clip]); }
+// ---------- cassette J-card theme (front = the VHS front drawn at VHS width, scaled down) ----------
+
+const scaled = (fn) => (ctx, w, h) => { const k = w / VHS.panels.front.w; ctx.scale(k, k); fn(ctx, w / k, h / k); };
+const badges = () => S.theme.badges.split(',').map((b) => b.trim()).filter(Boolean);
+const stripes = (ctx, y, w, t) => col().s.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-O, y + i * t, w + 2 * O, t); });
+
+function jSpineShapes(ctx, w, h) {
+  const { s, dark } = col();
+  ctx.fillStyle = dark; ctx.fillRect(-O, -O, w + 2 * O, h + 2 * O);
+  for (let i = 0; i < 5; i++) { // stripe caps, purple on the outside
+    ctx.fillStyle = s[4 - i];
+    ctx.fillRect(-O, i ? i * 1.2 : -O, w + 2 * O, i ? 1.2 : 1.2 + O);
+    ctx.fillRect(-O, h - (i + 1) * 1.2, w + 2 * O, i ? 1.2 : 1.2 + O);
+  }
+}
+
+function jSpineText(ctx, w, h) {
+  const { light } = col(), t = S.theme;
+  ctx.save(); ctx.translate(w / 2, h / 2); ctx.rotate(Math.PI / 2); // reads top-to-bottom
+  text(ctx, t.spineTitle, -h / 2 + 10, 2.1, 6, { color: light, maxW: h * 0.55 });
+  text(ctx, t.spineSub, h / 2 - 10, 1.5, 2.6, { weight: 500, color: light, align: 'right', spacing: 0.4, maxW: h * 0.28 });
+  ctx.restore();
+}
+
+function flapShapes(ctx, w, h) { ctx.fillStyle = col().dark; ctx.fillRect(-O, -O, w + 2 * O, h + 2 * O); stripes(ctx, 8, w, 1.2); }
+
+function flapText(ctx, w, h) {
+  const { light } = col();
+  let y = 26;
+  for (const b of badges()) { if (y > h - 16) break; boxed(ctx, b, w / 2, y, Math.min(3, w / 5), light); y += 7; }
+  text(ctx, S.theme.backSub, w / 2, h - 8, 2.4, { weight: 600, color: light, align: 'center', maxW: w - 3 });
+}
+
+function insidesText(ctx, P) { // heading + one-per-line list, flowing across fold-outs left to right
+  const { s, dark } = col(), t = S.theme, items = t.bullets.split('\n').map((b) => b.trim()).filter(Boolean);
+  let i = 0;
+  Object.entries(P).filter(([k]) => k.startsWith('inside')).forEach(([, p], n) => inPanel(ctx, p, (c, w, h) => {
+    let y = 20;
+    if (n === 0 && t.backTitle) { text(c, t.backTitle, 6, 22, 6, { color: dark, maxW: w - 12 }); y = 32; }
+    for (; i < items.length && y < h - 10; i++) {
+      c.fillStyle = s[i % 5]; c.fillRect(6, y - 2.2, 3.5, 2.4);
+      y = wrap(c, items[i], 12, y, w - 18, 2.6, 3.5, dark, 500, h - 7) + 2.5;
+    }
+  }));
+}
+
+const THEMES = { // shapes go under the layers, text over them
+  VHS: {
+    shapes: (ctx, P) => {
+      inPanel(ctx, P.front, frontShapes); inPanel(ctx, P.back, backShapes);
+      inPanel(ctx, P.spine, (c, w, h) => spineShapes(c, w, h)); inPanel(ctx, P.side, (c, w, h) => spineShapes(c, w, h, !S.mirrorSpine));
+    },
+    text: (ctx, P) => {
+      inPanel(ctx, P.front, frontText); inPanel(ctx, P.back, backText);
+      inPanel(ctx, P.spine, spineText); if (S.mirrorSpine) inPanel(ctx, P.side, spineText);
+    },
+  },
+  'J-card': {
+    shapes: (ctx, P) => {
+      inPanel(ctx, P.front, scaled(frontShapes)); inPanel(ctx, P.spine, jSpineShapes); inPanel(ctx, P.flap, flapShapes);
+      for (const [k, p] of Object.entries(P)) if (k.startsWith('inside')) inPanel(ctx, p, (c, w) => stripes(c, 6, w, 1.2));
+    },
+    text: (ctx, P) => { inPanel(ctx, P.front, scaled(frontText)); inPanel(ctx, P.spine, jSpineText); inPanel(ctx, P.flap, flapText); insidesText(ctx, P); },
+  },
+};
+
+function panelRect(clip) { const p = F.panels[clip]; return p ? ext(p) : null; }
 
 function layerSize(l) {
   if (l.type === 'image') return [l.w, l.h];
@@ -233,7 +310,7 @@ function drawLayer(ctx, l) {
 
 function drawArt(ctx) { // ctx origin = bleed-box top-left, units mm
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, AW, AH); ctx.clip(); ctx.translate(B, B);
-  const P = VHS.panels;
+  const P = F.panels;
   if (S.dielineOnly) {
     ctx.fillStyle = '#fff'; ctx.fillRect(-B, -B, AW, AH);
     for (const [k, p] of Object.entries(P)) {
@@ -243,15 +320,9 @@ function drawArt(ctx) { // ctx origin = bleed-box top-left, units mm
     }
   } else {
     ctx.fillStyle = col().light; ctx.fillRect(-B, -B, AW, AH);
-    inPanel(ctx, P.front, frontShapes);
-    inPanel(ctx, P.spine, (c, w, h) => spineShapes(c, w, h));
-    inPanel(ctx, P.side, (c, w, h) => spineShapes(c, w, h, !S.mirrorSpine));
-    inPanel(ctx, P.back, backShapes);
+    THEMES[F.name].shapes(ctx, P);
     for (const l of S.layers) if (l.visible) drawLayer(ctx, l);
-    inPanel(ctx, P.front, frontText);
-    inPanel(ctx, P.spine, spineText);
-    if (S.mirrorSpine) inPanel(ctx, P.side, spineText);
-    inPanel(ctx, P.back, backText);
+    THEMES[F.name].text(ctx, P);
   }
   ctx.restore();
 }
@@ -288,7 +359,7 @@ const toWorld = (l, p) => { const q = rotp(p, l.rot); return { x: l.x + q.x, y: 
 const selected = () => S.layers.find((l) => l.id === sel) || null;
 function reclip(l) { // a panel-clipped layer moved onto another panel follows it, instead of vanishing
   if (l.clip === 'sheet') return;
-  const hit = Object.entries(VHS.panels).find(([, p]) => l.x >= p.x && l.x < p.x + p.w && l.y >= p.y && l.y < p.y + p.h);
+  const hit = Object.entries(F.panels).find(([, p]) => l.x >= p.x && l.x < p.x + p.w && l.y >= p.y && l.y < p.y + p.h);
   if (hit) l.clip = hit[0];
 }
 
@@ -300,6 +371,7 @@ function handles(l) { // screen-space positions of the corner (scale) and rotate
 }
 
 function render() {
+  geo(); if (refit) { refit = false; return fit(); }
   const dpr = devicePixelRatio || 1, r = stage.getBoundingClientRect();
   cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
   vctx.setTransform(1, 0, 0, 1, 0, 0); vctx.fillStyle = '#4a4b52'; vctx.fillRect(0, 0, cv.width, cv.height);
@@ -435,14 +507,14 @@ const status = (s) => { $('#status').textContent = s; };
 async function addImage(file) {
   const id = uid();
   await loadAsset(id, await readAs(file, 'readAsDataURL'));
-  const img = assets[id].img, f = VHS.panels.front;
+  const img = assets[id].img, f = F.panels.front;
   const w = f.w + 2 * B, h = w * img.height / img.width;
   const l = { id: uid(), type: 'image', asset: id, name: file.name, x: f.x + f.w / 2, y: f.y + f.h / 2, w, h, rot: 0, flipX: false, flipY: false, opacity: 1, blend: 'source-over', clip: 'front', visible: true, bri: 100, con: 100, sat: 100, gray: 0 };
   S.layers.push(l); sel = l.id; commit(); syncLayers(); render();
 }
 
 function addText() {
-  const f = VHS.panels.front;
+  const f = F.panels.front;
   const l = { id: uid(), type: 'text', text: 'NEW TEXT', font: 'Bebas Neue', weight: 400, size: 14, color: '#ffffff', spacing: 0, x: f.x + f.w / 2, y: f.y + f.h / 2, rot: 0, opacity: 1, blend: 'source-over', clip: 'sheet', visible: true };
   S.layers.push(l); sel = l.id; commit(); syncLayers(); render();
 }
@@ -469,7 +541,6 @@ function syncLayers() {
 function removeLayer(l) { S.layers = S.layers.filter((x) => x !== l); if (sel === l.id) sel = null; commit(); syncLayers(); render(); }
 
 const opts = (list, labels = list) => list.map((v, i) => `<option value="${v}">${labels[i]}</option>`).join('');
-const CLIPS = ['sheet', 'front', 'spine', 'back', 'side'];
 
 function buildProps() { // built on selection change; values filled by syncProps
   const l = selected(), el = $('#props');
@@ -482,7 +553,7 @@ function buildProps() { // built on selection change; values filled by syncProps
       ${num('size', 'Size mm')}${num('spacing', 'Spacing mm', 0.1)}<label>Colour<input type="color" data-p="color"></label></div>` : ''}
     <div class="grid2">${num('x', 'X mm')}${num('y', 'Y mm')}
       ${l.type === 'image' ? num('w', 'W mm') + num('h', 'H mm') : ''}${num('rot', 'Rotate °', 1)}
-      <label>Clip to<select data-p="clip">${opts(CLIPS, ['Whole sheet', 'Front', 'Spine', 'Back', 'Side panel'])}</select></label></div>
+      <label>Clip to<select data-p="clip">${opts(['sheet', ...Object.keys(F.panels)], ['Whole sheet', ...Object.keys(F.panels).map((k) => k[0].toUpperCase() + k.slice(1))])}</select></label></div>
     ${range('opacity', 'Opacity', 0, 1, 0.01)}
     <label>Blend<select data-p="blend">${opts(BLENDS, ['normal', ...BLENDS.slice(1)])}</select></label>
     ${l.type === 'image' ? `<div class="grid2"><label class="row"><input type="checkbox" data-p="flipX"> Flip H</label><label class="row"><input type="checkbox" data-p="flipY"> Flip V</label>
@@ -516,7 +587,6 @@ const syncLayerNames = () => { const t = $('#layers li.sel span'), l = selected(
 $('#preset').innerHTML = `<option value="">Custom</option>${opts(Object.keys(PALETTES))}`;
 $('#colors').innerHTML = S.colors.map((_, i) => `<input type="color" data-c="${i}" title="${i < 5 ? `Stripe ${i + 1}` : i === 5 ? 'Dark' : 'Light'}">`).join('');
 $('#fields').innerHTML = FIELDS.map(([k, label, , multi]) => `<label>${label}${multi ? `<textarea rows="3" data-k="${k}"></textarea>` : `<input data-k="${k}">`}</label>`).join('');
-$('#paper').innerHTML = opts(PAPERS.map((p) => p.name));
 
 $('#preset').onchange = (e) => { if (e.target.value) { S.colors = [...PALETTES[e.target.value]]; commit(); syncUI(); render(); } };
 $('#colors').addEventListener('input', (e) => { S.colors[+e.target.dataset.c] = e.target.value; $('#preset').value = ''; render(); });
@@ -524,9 +594,17 @@ $('#colors').addEventListener('change', commit);
 $('#fields').addEventListener('input', (e) => { S.theme[e.target.dataset.k] = e.target.value; render(); });
 $('#fields').addEventListener('change', commit);
 for (const k of ['mirrorSpine', 'guides', 'dielineOnly']) $(`#${k}`).onchange = (e) => { S[k] = e.target.checked; commit(); render(); };
+$('#format').onchange = (e) => { S.format = e.target.value; syncUI(); commit(); render(); }; // syncUI may swap the paper: same undo step
+for (const k of ['jflap', 'jextra']) $(`#${k}`).onchange = (e) => { S[k] = +e.target.value; syncUI(); commit(); render(); };
 for (const k of ['paper', 'mode']) $(`#${k}`).onchange = (e) => { S[k] = e.target.value; commit(); };
 
 function syncUI() {
+  geo();
+  $('#format').value = S.format; $('#jflap').value = S.jflap; $('#jextra').value = S.jextra;
+  $('#jopts').hidden = S.format !== 'jcard'; $('#mirrorRow').hidden = S.format === 'jcard';
+  const papers = PAPERS.filter((p) => !p.w || fits(p, F)); // only sheets this format fits on
+  $('#paper').innerHTML = opts(papers.map((p) => p.name));
+  if (!papers.some((p) => p.name === S.paper)) S.paper = papers[0].name;
   for (const i of $('#colors').children) i.value = S.colors[+i.dataset.c];
   $('#preset').value = Object.keys(PALETTES).find((k) => PALETTES[k].join() === S.colors.join()) || '';
   for (const i of $('#fields').querySelectorAll('[data-k]')) if (i !== document.activeElement) i.value = S.theme[i.dataset.k] ?? '';
@@ -585,6 +663,7 @@ $('#softProof').onchange = async (e) => {
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.round(w); c.height = Math.round(h); return c; };
 
 function renderPage(dpi, paper) { // paper null/0 = bleed box only
+  geo();
   const s = dpi / 25.4, pw = paper?.w || AW, ph = paper?.h || AH;
   const page = mk(pw * s, ph * s), pc = page.getContext('2d');
   pc.fillStyle = '#fff'; pc.fillRect(0, 0, page.width, page.height);

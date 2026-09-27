@@ -1,6 +1,9 @@
 # CoverSlip
 
-Make printable slip covers for obsolete media. Right now it supports one format: a bottom-load VHS box (4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″).
+Make printable covers for obsolete media. Two formats so far (pick one under **Format**):
+
+- **VHS slip box:** a bottom-load box, 4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″.
+- **Cassette J-card:** 4″ tall, with a 65.1 mm front, a 12.7 mm spine and an adjustable back flap (15.9 mm by default). You can add 0–3 fold-out panels behind the front; the back paragraphs flow across them as a track list.
 
 Fill in the retro theme, stack image and text layers on it, and export a 300 DPI PDF (RGB, or CMYK through an ICC profile) or a PNG.
 
@@ -35,7 +38,7 @@ You need to be online for Google Fonts and for the colour-management library (lo
 
 1. Tick **Test print (dieline only)** and print it on plain paper at **100% / actual size**. Cut it out and fold it around a real tape before using good stock. The flap shapes were traced from a template image, so check the fit.
 2. Red lines are cuts and dashed blue lines are folds. The open end (with the thumb notches) is at the bottom.
-3. The artwork fits on A3, SRA3, Tabloid, 12×18″ or 13×19″. A4, Letter and Legal are too small.
+3. The paper list only offers sheets the current format fits on. VHS needs A3 or larger. A J-card fits on A4 (Letter only up to 2 fold-outs).
 
 ## Develop
 
@@ -45,4 +48,4 @@ No build step. `lib.js` holds the dieline geometry and the PDF writer, and `app.
 node check.mjs   # geometry + PDF xref self-check
 ```
 
-Adding a format means adding an object shaped like `VHS` in `lib.js` plus theme drawing for its panels.
+Adding a format means adding a geometry object shaped like `VHS`/`jcard()` in `lib.js`, plus an entry in `THEMES` in `app.js` that draws its panels.

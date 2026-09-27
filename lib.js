@@ -38,8 +38,23 @@ export const VHS = (() => {
   };
 })();
 
-// Landscape sheets the dieline + bleed fits on (A4 and Legal are too small). null = trim to bleed box.
+// Cassette J-card: [fold-outs…] front | spine | back flap, 4" tall. Straight cut, so just a rectangle.
+// extra = fold-out panels left of the front (they fold behind it), numbered outward: inside1 is next to the front.
+export function jcard(flap = 15.9, extra = 0) {
+  const H = 101.6, FW = 65.1, SP = 12.7, panels = {};
+  let x = 0;
+  for (let i = extra; i >= 1; i--) { panels[`inside${i}`] = { x, y: 0, w: FW, h: H }; x += FW; }
+  panels.front = { x, y: 0, w: FW, h: H }; x += FW;
+  panels.spine = { x, y: 0, w: SP, h: H }; x += SP;
+  panels.flap = { x, y: 0, w: flap, h: H }; x += flap;
+  const folds = Object.values(panels).slice(1).map((p) => `M ${p.x} 0 V ${H}`).join(' ');
+  return { name: 'J-card', w: x, h: H, panels, cut: `M 0 0 H ${x} V ${H} H 0 Z`, slits: '', folds };
+}
+
+// Landscape sheets; the app lists only the ones the current format + bleed fits on. w 0 = trim to bleed box.
 export const PAPERS = [
+  { name: 'A4', w: 297, h: 210 },
+  { name: 'Letter', w: 279.4, h: 215.9 },
   { name: 'A3', w: 420, h: 297 },
   { name: 'SRA3', w: 450, h: 320 },
   { name: 'Tabloid 11×17"', w: 431.8, h: 279.4 },
