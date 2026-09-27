@@ -1,6 +1,6 @@
 // Self-check for the maths that fails silently: node check.mjs
 import assert from 'node:assert/strict';
-import { VHS, VHS_SPLIT, jcard, PAPERS, fits, pdf, svgToPdf } from './lib.js';
+import { VHS, VHS_SPLIT, CLAMSHELL, DVD, BLURAY, CD, jcard, PAPERS, fits, pdf, svgToPdf } from './lib.js';
 
 const { side, front, spine, back } = VHS.panels;
 assert.equal(front.x, side.x + side.w, 'front abuts side');
@@ -20,6 +20,17 @@ const j0 = jcard(15.9, 0), j3 = jcard(15.9, 3);
 assert.ok(Math.abs(j0.w - (65.1 + 12.7 + 15.9)) < 1e-9 && j0.h === 101.6, 'J-card 3-panel size');
 assert.ok(Math.abs(j3.w - j0.w - 3 * 65.1) < 1e-9 && j3.panels.inside1.x + 65.1 === j3.panels.front.x, 'fold-outs sit left of front');
 assert.ok(fits(paper('A4'), j0) && fits(paper('Letter'), j0) && fits(paper('A4'), j3) && !fits(paper('Letter'), j3), 'J-card paper fits');
+
+for (const f of [CLAMSHELL, DVD, BLURAY]) {
+  const { back, spine, front } = f.panels;
+  assert.ok(spine.x === back.x + back.w && front.x === spine.x + spine.w && Math.abs(f.w - (back.w + spine.w + front.w)) < 1e-9, `${f.name} panels abut`);
+}
+assert.ok(Math.abs(CLAMSHELL.w - 11.625 * 25.4) < 1e-9 && Math.abs(CLAMSHELL.h - 8.375 * 25.4) < 1e-9, 'clamshell 11-5/8" x 8-3/8"');
+assert.ok(DVD.w === 273 && DVD.h === 183 && BLURAY.w === 269 && BLURAY.h === 148, 'DVD / Blu-ray wraps');
+assert.ok(CD.panels.spine2.x + CD.panels.spine2.w === 151 && CD.panels.back.h === 118 && CD.panels.front.w === 120, 'CD tray 151x118 + booklet 120');
+assert.ok(CD.panels.front.x - 151 >= 2 * 3.175, 'CD pieces far enough apart for both bleeds');
+assert.ok(fits(paper('A3'), CLAMSHELL) && !fits(paper('A4'), CLAMSHELL), 'clamshell needs A3');
+for (const f of [DVD, BLURAY, CD]) assert.ok(fits(paper('A4'), f), `${f.name} fits A4`);
 
 // PDF: every xref offset must point at its "n 0 obj", and startxref at "xref".
 const page = { wPt: 10, hPt: 10, content: 'q 10 0 0 10 0 0 cm /Im0 Do Q', images: { Im0: { width: 2, height: 2, pixels: new Uint8Array(16), cmyk: true } } };

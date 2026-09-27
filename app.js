@@ -1,4 +1,4 @@
-import { VHS, VHS_SPLIT, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
+import { VHS, VHS_SPLIT, CLAMSHELL, DVD, BLURAY, CD, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
 import { PdfCtx } from './vector.js';
 
 const LCMS_URL = 'https://cdn.jsdelivr.net/npm/lcms-wasm@1.0.5/dist/lcms.js';
@@ -51,12 +51,16 @@ const view = { s: 1, x: 0, y: 0, fit: 1 }; // css px per mm, offset of bleed-box
 const $ = (q) => document.querySelector(q);
 const uid = () => Math.random().toString(36).slice(2, 10);
 const O = 10; // theme shapes overdraw this far past panel edges; the panel clip trims them
+const FORMATS = { // S.format → geometry
+  vhs: () => (S.splitLid ? VHS_SPLIT : VHS), clamshell: () => CLAMSHELL, dvd: () => DVD, bluray: () => BLURAY, cd: () => CD,
+  jcard: () => jcard(S.jflap, S.jextra),
+};
 let F, CUT, SLITS, FOLDS, AW, AH, geoKey, refit; // current format's geometry; AW × AH = bleed box
 function geo() { // rebuild when the format settings change
   S.jflap = Math.min(40, Math.max(10, +S.jflap || 15.9)); S.jextra = Math.min(3, Math.max(0, Math.round(+S.jextra) || 0));
   const k = `${S.format}|${S.splitLid}|${S.jflap}|${S.jextra}`;
   if (k === geoKey) return;
-  geoKey = k; refit = true; F = S.format === 'jcard' ? jcard(S.jflap, S.jextra) : S.splitLid ? VHS_SPLIT : VHS;
+  geoKey = k; refit = true; F = (FORMATS[S.format] || FORMATS.vhs)();
   CUT = new Path2D(F.cut); SLITS = new Path2D(F.slits); FOLDS = new Path2D(F.folds);
   AW = F.w + 2 * B; AH = F.h + 2 * B;
 }
@@ -108,9 +112,9 @@ function barcode(ctx, num, x, y, w, h, color) { // decorative, not a scannable U
   text(ctx, num, x + w / 2, y + h + 3.6, 2.8, { weight: 500, color, align: 'center', spacing: 0.3 });
 }
 
-function ext(p) { // panel rect, grown by the bleed on edges that aren't shared with a neighbour
-  const last = Object.values(F.panels).at(-1);
-  const x0 = p.x === 0 ? -B : p.x, x1 = p.x + p.w + (p === last ? B : 0);
+function ext(p) { // panel rect, grown by the bleed on edges that aren't shared with a neighbouring panel
+  const ps = Object.values(F.panels), near = (a, b) => Math.abs(a - b) < 1e-6;
+  const x0 = p.x - (ps.some((q) => near(q.x + q.w, p.x)) ? 0 : B), x1 = p.x + p.w + (ps.some((q) => near(q.x, p.x + p.w)) ? 0 : B);
   return { x: x0, y: p.y - B, w: x1 - x0, h: p.h + 2 * B };
 }
 
@@ -144,8 +148,7 @@ function frontText(ctx, W, H) {
     ctx.fillStyle = s[2]; ctx.fillRect(-O, 45, Xs - 4 + O, 1.2);
     text(ctx, t.subtitle, 7, 42.8, 4.6, { weight: 700, color: dark, maxW: Xs - 14 });
   }
-  const compact = H < 170; // J-card front: less room between the subtitle bar and the label
-  text(ctx, t.tagline, 7, compact ? 57 : 62, compact ? 8 : 11, { color: light, maxW: Xs - 14 });
+  text(ctx, t.tagline, 7, 62, 11, { color: light, maxW: Xs - 14 });
   text(ctx, t.label, 7, Ys - 32, 13, { color: light, maxW: Xs - 14 });
   if (t.label) { ctx.fillStyle = light; ctx.fillRect(-O, Ys - 29, 52 + O, 0.4); }
   text(ctx, t.line1, 7, Ys - 22, 4, { weight: 500, color: light, maxW: Xs - 14 });
@@ -217,7 +220,9 @@ function backText(ctx, W, H) {
 
 // ---------- cassette J-card theme (front = the VHS front drawn at VHS width, scaled down) ----------
 
-const scaled = (fn) => (ctx, w, h) => { const k = w / VHS.panels.front.w; ctx.scale(k, k); fn(ctx, w / k, h / k); };
+// The front/back/spine layouts are designed at VHS height; other formats draw them scaled to their panel height
+// (the layouts stretch sideways to whatever width that leaves).
+const scaled = (fn) => (ctx, w, h) => { const k = h / VHS.panels.front.h; ctx.scale(k, k); fn(ctx, w / k, h / k); };
 const badges = () => S.theme.badges.split(',').map((b) => b.trim()).filter(Boolean);
 const stripes = (ctx, y, w, t) => col().s.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-O, y + i * t, w + 2 * O, t); });
 
@@ -234,8 +239,9 @@ function jSpineShapes(ctx, w, h) {
 function jSpineText(ctx, w, h) {
   const { light } = col(), t = S.theme;
   ctx.save(); ctx.translate(w / 2, h / 2); ctx.rotate(Math.PI / 2); // reads top-to-bottom
-  text(ctx, t.spineTitle, -h / 2 + 10, 2.1, 6, { color: light, maxW: h * 0.55 });
-  text(ctx, t.spineSub, h / 2 - 10, 1.5, 2.6, { weight: 500, color: light, align: 'right', spacing: 0.4, maxW: h * 0.28 });
+  const ts = Math.min(6, w * 0.47), ss = Math.min(2.6, w * 0.3); // shrink for skinny spines (CD tray is 6.5mm)
+  text(ctx, t.spineTitle, -h / 2 + 10, ts * 0.35, ts, { color: light, maxW: h * 0.55 });
+  text(ctx, t.spineSub, h / 2 - 10, ss * 0.36, ss, { weight: 500, color: light, align: 'right', spacing: 0.4, maxW: h * 0.28 });
   ctx.restore();
 }
 
@@ -261,25 +267,23 @@ function insidesText(ctx, P) { // heading + one-per-line list, flowing across fo
   }));
 }
 
-const THEMES = { // shapes go under the layers, text over them
-  VHS: {
-    shapes: (ctx, P) => {
-      inPanel(ctx, P.front, frontShapes); inPanel(ctx, P.back, backShapes);
-      inPanel(ctx, P.spine, (c, w, h) => spineShapes(c, w, h)); inPanel(ctx, P.side, (c, w, h) => spineShapes(c, w, h, !S.mirrorSpine));
-    },
-    text: (ctx, P) => {
-      inPanel(ctx, P.front, frontText); inPanel(ctx, P.back, backText);
-      inPanel(ctx, P.spine, spineText); if (S.mirrorSpine) inPanel(ctx, P.side, spineText);
-    },
-  },
-  'J-card': {
-    shapes: (ctx, P) => {
-      inPanel(ctx, P.front, scaled(frontShapes)); inPanel(ctx, P.spine, jSpineShapes); inPanel(ctx, P.flap, flapShapes);
-      for (const [k, p] of Object.entries(P)) if (k.startsWith('inside')) inPanel(ctx, p, (c, w) => stripes(c, 6, w, 1.2));
-    },
-    text: (ctx, P) => { inPanel(ctx, P.front, scaled(frontText)); inPanel(ctx, P.spine, jSpineText); inPanel(ctx, P.flap, flapText); insidesText(ctx, P); },
-  },
+// Theme by panel role (key without its number: spine1 → spine). Shapes go under the layers, text over them.
+const role = (k) => k.replace(/\d+$/, '');
+const wide = (w) => w >= 20; // VHS-style spine (badges, stacked title) vs a thin one (title along it)
+const SHAPES = {
+  front: scaled(frontShapes), back: scaled(backShapes),
+  spine: (c, w, h) => (wide(w) ? scaled(spineShapes) : jSpineShapes)(c, w, h),
+  side: scaled((c, w, h) => spineShapes(c, w, h, !S.mirrorSpine)),
+  flap: flapShapes, inside: (c, w) => stripes(c, 6, w, 1.2),
 };
+const TEXTS = {
+  front: scaled(frontText), back: scaled(backText),
+  spine: (c, w, h) => (wide(w) ? scaled(spineText) : jSpineText)(c, w, h),
+  side: (c, w, h) => S.mirrorSpine && scaled(spineText)(c, w, h),
+  flap: flapText,
+};
+function themeShapes(ctx, P) { for (const [k, p] of Object.entries(P)) if (SHAPES[role(k)]) inPanel(ctx, p, SHAPES[role(k)]); }
+function themeText(ctx, P) { for (const [k, p] of Object.entries(P)) if (TEXTS[role(k)]) inPanel(ctx, p, TEXTS[role(k)]); insidesText(ctx, P); }
 
 function panelRect(clip) { const p = F.panels[clip]; return p ? ext(p) : null; }
 
@@ -324,14 +328,14 @@ function drawContent(ctx) { // ctx origin = dieline top-left
     ctx.fillStyle = '#fff'; ctx.fillRect(-B, -B, AW, AH);
     for (const [k, p] of Object.entries(P)) {
       ctx.save(); ctx.translate(p.x + p.w / 2, p.y + p.h / 2); if (p.w < 40) ctx.rotate(Math.PI / 2);
-      text(ctx, `${k.toUpperCase()}  ${p.w < 40 ? '←' : '↑'} top`, 0, 0, 7, { weight: 600, color: '#999', align: 'center' });
+      text(ctx, `${k.toUpperCase()}  ${p.w < 40 ? '←' : '↑'} top`, 0, 0, Math.min(7, p.w * 0.7), { weight: 600, color: '#999', align: 'center', maxW: Math.max(p.w, p.h) - 4 });
       ctx.restore();
     }
   } else {
     ctx.fillStyle = col().light; ctx.fillRect(-B, -B, AW, AH);
-    THEMES[F.name].shapes(ctx, P);
+    themeShapes(ctx, P);
     for (const l of S.layers) if (l.visible) drawLayer(ctx, l);
-    THEMES[F.name].text(ctx, P);
+    themeText(ctx, P);
   }
 }
 
@@ -723,7 +727,7 @@ $('#intent').onchange = async (e) => { S.intent = +e.target.value; commit(); if 
 function syncUI() {
   geo();
   $('#format').value = S.format; $('#jflap').value = S.jflap; $('#jextra').value = S.jextra;
-  $('#jopts').hidden = S.format !== 'jcard'; $('#mirrorRow').hidden = $('#splitRow').hidden = S.format === 'jcard';
+  $('#jopts').hidden = S.format !== 'jcard'; $('#mirrorRow').hidden = $('#splitRow').hidden = S.format !== 'vhs';
   $('#splitLid').checked = S.splitLid;
   const papers = PAPERS.filter((p) => !p.w || fits(p, F)); // only sheets this format fits on
   $('#paper').innerHTML = opts(papers.map((p) => p.name));

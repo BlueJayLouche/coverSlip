@@ -73,6 +73,31 @@ export function jcard(flap = 15.9, extra = 0) {
   return { name: 'J-card', w: x, h: H, panels, cut: `M 0 0 H ${x} V ${H} H 0 Z`, slits: '', folds };
 }
 
+// Flat wrap for a case with a clear outer sleeve: back | spine | front, front on the right (opens like a book).
+function wrap(name, back, spine, h, front = back) {
+  const panels = { back: { x: 0, y: 0, w: back, h }, spine: { x: back, y: 0, w: spine, h }, front: { x: back + spine, y: 0, w: front, h } }, w = back + spine + front;
+  return { name, w, h, panels, cut: `M 0 0 H ${w} V ${h} H 0 Z`, slits: '', folds: `M ${back} 0 V ${h} M ${back + spine} 0 V ${h}` };
+}
+const IN = 25.4;
+export const CLAMSHELL = wrap('VHS clamshell', 5.25 * IN, 1.125 * IN, 8.375 * IN); // heavy-duty library case sleeve
+export const DVD = wrap('DVD', 129.5, 14, 183);
+export const BLURAY = wrap('Blu-ray', 128.5, 12, 148); // ponytail: 12mm spine; some Blu-ray cases are 14mm
+
+// CD jewel case: the tray card (spine | back | spine, U-folded round the tray) and the front booklet
+// cover, side by side so both print on one sheet.
+export const CD = (() => {
+  const H = 118, SP = 6.5, BK = 138, TW = SP + BK + SP, GAP = 2 * BLEED + 4, BX = TW + GAP, BS = 120;
+  return {
+    name: 'CD', w: BX + BS, h: BS,
+    panels: {
+      spine1: { x: 0, y: 0, w: SP, h: H }, back: { x: SP, y: 0, w: BK, h: H }, spine2: { x: SP + BK, y: 0, w: SP, h: H },
+      front: { x: BX, y: 0, w: BS, h: BS },
+    },
+    cut: `M 0 0 H ${TW} V ${H} H 0 Z M ${BX} 0 H ${BX + BS} V ${BS} H ${BX} Z`, slits: '',
+    folds: `M ${SP} 0 V ${H} M ${SP + BK} 0 V ${H}`,
+  };
+})();
+
 // Landscape sheets; the app lists only the ones the current format + bleed fits on. w 0 = trim to bleed box.
 export const PAPERS = [
   { name: 'A4', w: 297, h: 210 },

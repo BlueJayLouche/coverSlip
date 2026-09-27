@@ -1,9 +1,17 @@
 # CoverSlip
 
-Make printable covers for obsolete media. Two formats so far (pick one under **Format**):
+Make printable covers for obsolete media. Pick a format under **Format**:
 
-- **VHS slip box:** a bottom-load box, 4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″. It needs A3 in one piece. Tick **Split lid** to fit it on A4 as two sheets: the box body, and the lid + dust flaps on a strip that folds down and glues inside the top of the box.
-- **Cassette J-card:** 4″ tall, with a 65.1 mm front, a 12.7 mm spine and an adjustable back flap (15.9 mm by default). You can add 0–3 fold-out panels behind the front; the back paragraphs flow across them as a track list.
+| Format | Size (trim) | Fits |
+|---|---|---|
+| VHS slip box (retail) | 4⅛″ × 1¹⁄₁₆″ × 7⁷⁄₁₆″ box, bottom-load | A3 — or A4 with **Split lid** (2 sheets: body, and lid + flaps on a strip that glues inside the top) |
+| VHS clamshell wrap (rental) | 11⅝″ × 8⅜″: back 5¼″, spine 1⅛″, front 5¼″ | A3 |
+| Cassette J-card | 4″ tall; 65.1 mm front, 12.7 mm spine, adjustable flap (15.9 mm default), 0–3 fold-outs | A4 |
+| DVD case wrap | 273 × 183 mm, 14 mm spine | A4 / Letter |
+| Blu-ray case wrap | 269 × 148 mm, 12 mm spine (some cases are 14 mm) | A4 / Letter |
+| CD jewel case | tray card 151 × 118 mm (6.5 mm spines) + booklet front 120 × 120 mm, side by side | A4 |
+
+Case sizes vary a little between manufacturers — print a test (below) and check it in your actual case.
 
 Fill in the retro theme, stack image and text layers on it, and export a 300 DPI PDF (RGB, or CMYK through an ICC profile) or a PNG.
 
@@ -42,7 +50,7 @@ You need to be online for Google Fonts and for the colour-management library (lo
 
 1. Tick **Test print (dieline only)** and print it on plain paper at **100% / actual size**. Cut it out and fold it around a real tape before using good stock. The flap shapes were traced from a template image, so check the fit.
 2. Red lines are cuts and dashed blue lines are folds. The open end (with the thumb notches) is at the bottom.
-3. The paper list only offers sheets the current format fits on. VHS needs A3 or larger, or A4 with **Split lid** (the PDF then has two pages). A J-card fits on A4 (Letter only up to 2 fold-outs).
+3. The paper list only offers sheets the current format fits on (see the table above). With **Split lid** the PDF has two pages. A J-card fits on A4 (Letter only up to 2 fold-outs).
 
 ## Develop
 
@@ -52,4 +60,4 @@ No build step. `lib.js` holds the dieline geometry and the PDF writer, and `app.
 node check.mjs   # geometry + PDF xref self-check
 ```
 
-Adding a format means adding a geometry object shaped like `VHS`/`jcard()` in `lib.js`, plus an entry in `THEMES` in `app.js` that draws its panels.
+Adding a format means adding a geometry object shaped like `VHS`/`DVD`/`jcard()` in `lib.js` and an entry in `FORMATS` in `app.js`. The theme draws each panel by its role (`front`, `back`, `spine`, `side`, `flap`, `inside`: the panel key without its number), scaling the VHS-height layouts to the panel's height.
