@@ -45,7 +45,7 @@ You need to be online for Google Fonts and for the colour-management library (lo
 - **Fonts:** 8 Google fonts built in. "Upload font…" in a text layer's properties (or drop a `.ttf`/`.otf`/`.woff` on the canvas) adds your own; it's saved inside the project file.
 - **Save / Open:** a `.coverslip.json` file with the images embedded. Work also autosaves in the browser.
 - **PDF type:** *Raster* (300 DPI, exactly what you see) or *Vector* (text and shapes stay as sharp outlines, photos are embedded at full resolution, blend modes carry over). Vector output is trimmed to the bleed box, not the die shape. For vector export, uploaded fonts must be TTF, OTF or WOFF (not WOFF2).
-- **CMYK:** choose a rendering intent (perceptual by default) and load the ICC profile your print shop asks for (for example ISO Coated v2 / FOGRA39 from [eci.org](https://www.eci.org/en/downloads)) and choose CMYK. "Soft proof" previews the result on screen. No profile ships with the app, because the ECI profiles can't be redistributed without permission.
+- **CMYK:** pick a bundled profile — *ISO Coated v2 (FOGRA39)* for gloss/silk coated stock (e.g. Officeworks gloss), *ISO Coated v2 300%* (same, lighter ink), or *PSO Uncoated (FOGRA47)* for plain paper — or load the one your print shop gives you. Choose a rendering intent (perceptual by default); "Soft proof" previews the result on screen. The profile is embedded in the PDF.
 
 ## Print
 
@@ -62,3 +62,7 @@ node check.mjs   # geometry + PDF xref self-check
 ```
 
 Adding a format means adding a geometry object shaped like `VHS`/`DVD`/`jcard()` in `lib.js` and an entry in `FORMATS` in `app.js`. The theme draws each panel by its role (`front`, `back`, `spine`, `side`, `flap`, `inside`: the panel key without its number), scaling the VHS-height layouts to the panel's height.
+
+## Credits
+
+The bundled CMYK profiles in `profiles/` are by basICColor GmbH, under the zlib/libpng licence (`profiles/LICENSE-ZLIB-bICC`), taken from Debian's `icc-profiles-free` package.

@@ -94,14 +94,14 @@
     <h2>Export</h2>
     <label>Paper <select id="paper"></select></label>
     <label>Colour <select id="mode"><option value="rgb">RGB (home printing)</option><option value="cmyk">CMYK (ICC profile)</option></select></label>
-    <label class="row"><button id="loadIcc">Load ICC profile…</button> <span id="iccName" class="empty">none</span></label>
+    <label>CMYK profile <select id="profile"></select></label>
     <label>Rendering intent <select id="intent"><option value="0">Perceptual</option><option value="1">Relative colorimetric</option><option value="2">Saturation</option><option value="3">Absolute colorimetric</option></select></label>
     <label class="row"><input type="checkbox" id="softProof"> Soft proof on screen</label>
     <label class="row"><input type="checkbox" id="guides"> Cut &amp; fold lines</label>
     <label class="row"><input type="checkbox" id="dielineOnly"> Test print (dieline only)</label>
     <label>PDF type <select id="pdfKind"><option value="raster">Raster, 300 DPI (exact preview)</option><option value="vector">Vector (sharp text &amp; shapes)</option></select></label>
     <div class="grid2"><button class="go" id="pdf">Export PDF</button><button id="png">Export PNG</button></div>
-    <p class="note">CMYK converts with the loaded ICC profile — ask your print shop which profile they want, e.g. ISO Coated v2 / FOGRA39 from eci.org. Vector PDFs keep text and shapes as outlines (photos stay embedded images) and are trimmed to the bleed box rather than the die shape.</p>
+    <p class="note">CMYK converts with the chosen profile. Gloss or silk stock at a copy shop (e.g. Officeworks): CMYK + ISO Coated v2. If your shop names a profile, load that one instead. Vector PDFs keep text and shapes as outlines (photos stay embedded images) and are trimmed to the bleed box rather than the die shape.</p>
     <details id="histBox"><summary><h2>History</h2></summary><ol id="history"></ol></details>
   </aside>
 </main>

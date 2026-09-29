@@ -13,6 +13,13 @@ const PALETTES = { // 5 stripes (inner → outer), dark, light
   Pastel: ['#ffe29a', '#ffc3a0', '#ff9aa2', '#d5a6e6', '#a0c4ff', '#2b2d42', '#f8f1e5'],
   Mono: ['#e0e0e0', '#bdbdbd', '#9e9e9e', '#757575', '#4e4e4e', '#101010', '#ededed'],
 };
+// Bundled CMYK profiles (basICColor, zlib licence — profiles/LICENSE-ZLIB-bICC). file → label
+const PROFILES = {
+  'ISOcoated_v2_bas.ICC': 'ISO Coated v2 (FOGRA39) — gloss / silk coated',
+  'ISOcoated_v2_300_bas.ICC': 'ISO Coated v2 300% — coated, lower ink limit',
+  'PSO_Uncoated_ISO12647_bas.ICC': 'PSO Uncoated (FOGRA47) — plain / uncoated paper',
+};
+const DEFAULT_PROFILE = { name: PROFILES['ISOcoated_v2_bas.ICC'], builtin: 'ISOcoated_v2_bas.ICC' };
 const FIELDS = [ // key, label, default, multiline
   ['title', 'Front title', 'E-240'],
   ['subtitle', 'Front subtitle bar', 'EXTRA LONG PLAY'],
@@ -40,7 +47,7 @@ const defaults = () => ({
   colors: [...PALETTES.Rainbow], mirrorSpine: true, layers: [],
   format: 'vhs', splitLid: false, jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
   fonts: [], // uploaded: { name, asset }
-  paper: 'A3', mode: 'rgb', intent: 0, pdfKind: 'raster', guides: true, dielineOnly: false, profile: null, // profile: { name, asset }
+  paper: 'A3', mode: 'rgb', intent: 0, pdfKind: 'raster', guides: true, dielineOnly: false, profile: DEFAULT_PROFILE, // profile: { name, builtin } | { name, asset }
 });
 
 let S = defaults();       // everything that's saved and undoable
@@ -591,6 +598,8 @@ async function loadProject(p) { // p may come from someone else's file: only dat
   await Promise.all(Object.entries(p.assets || {}).map(([id, url]) => loadAsset(id, url)));
   const d = defaults();
   S = { ...d, ...p.state, theme: { ...d.theme, ...p.state.theme } };
+  const pr = S.profile; // older files: null; builtin must be one we ship; custom must have its bytes
+  S.profile = pr?.builtin && PROFILES[pr.builtin] ? { name: PROFILES[pr.builtin], builtin: pr.builtin } : pr?.asset && assets[pr.asset] ? { name: String(pr.name), asset: pr.asset } : DEFAULT_PROFILE;
   if (!Array.isArray(S.layers)) S.layers = [];
   S.fonts = (Array.isArray(S.fonts) ? S.fonts : []).filter((f) => typeof f?.name === 'string' && assets[f.asset]).map((f) => ({ name: cleanFont(f.name), asset: f.asset }));
   await Promise.all(S.fonts.map((f) => registerFont(f).catch((err) => console.warn('font', f.name, err))));
@@ -741,8 +750,9 @@ function syncUI() {
   for (const i of $('#fields').querySelectorAll('[data-k]')) if (i !== document.activeElement) i.value = S.theme[i.dataset.k] ?? '';
   for (const k of ['mirrorSpine', 'guides', 'dielineOnly']) $(`#${k}`).checked = S[k];
   $('#paper').value = S.paper; $('#mode').value = S.mode; $('#intent').value = S.intent; $('#pdfKind').value = S.pdfKind;
-  $('#iccName').textContent = S.profile?.name || 'none';
-  $('#iccName').className = S.profile ? '' : 'empty';
+  const custom = S.profile.asset ? [[`asset:${S.profile.asset}`, S.profile.name]] : [];
+  $('#profile').innerHTML = opts([...Object.keys(PROFILES), ...custom.map((c) => c[0]), 'load'], [...Object.values(PROFILES), ...custom.map((c) => c[1]), 'Load your own ICC profile…']);
+  $('#profile').value = S.profile.builtin || `asset:${S.profile.asset}`;
   syncLayers(); syncHistory();
 }
 
@@ -759,11 +769,10 @@ function transform(lib, t, rgba, outCh) { // rgba → packed outCh bytes; chunke
 }
 
 async function getCms() {
-  if (!S.profile) throw new Error('Load a CMYK ICC profile first');
-  const key = `${S.profile.asset}|${S.intent}`;
+  const src = S.profile.builtin ? `profiles/${S.profile.builtin}` : assets[S.profile.asset].url, key = `${src.slice(0, 80)}|${S.profile.asset}|${S.intent}`;
   if (cms?.key === key) return cms;
   const { m, lib } = await (lcmsP ??= import(LCMS_URL).then(async (m) => ({ m, lib: await m.instantiate() })));
-  const bytes = new Uint8Array(await (await fetch(assets[S.profile.asset].url)).arrayBuffer());
+  const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
   const prof = lib.cmsOpenProfileFromMem(bytes, bytes.length);
   if (!prof || lib.cmsGetColorSpaceASCII(prof) !== 'CMYK') throw new Error('That is not a CMYK ICC profile');
   const srgb = lib.cmsCreate_sRGBProfile();
@@ -913,7 +922,12 @@ $('#save').onclick = () => download(new Blob([JSON.stringify(project())], { type
 $('#open').onclick = () => $('#projFile').click();
 $('#projFile').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadProject(JSON.parse(await f.text())); });
 $('#new').onclick = () => { if (confirm('Start a new cover? Unsaved changes will be lost.')) loadProject({ app: 'coverslip', state: defaults(), assets: {} }); };
-$('#loadIcc').onclick = () => $('#iccFile').click();
+$('#profile').onchange = async (e) => {
+  const v = e.target.value;
+  if (v === 'load') { syncUI(); return $('#iccFile').click(); } // put the select back until a file is chosen
+  if (PROFILES[v]) S.profile = { name: PROFILES[v], builtin: v };
+  commit(); if (softProof) { await getCms(); render(); }
+};
 $('#fontFile').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await uploadFont(f); });
 $('#iccFile').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await loadProfile(f); });
 
