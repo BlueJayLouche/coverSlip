@@ -1,5 +1,6 @@
 import { VHS, VHS_SPLIT, VHS_SIDE, CLAMSHELL, DVD, BLURAY, CD, pieces, jcard, fits, BLEED as B, PAPERS, pdf } from './lib.js';
 import { PdfCtx } from './vector.js';
+import { makeStyles } from './themes.js';
 
 const LCMS_URL = 'https://cdn.jsdelivr.net/npm/lcms-wasm@1.0.5/dist/lcms.js';
 const OT_URL = 'https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.module.js';
@@ -45,7 +46,7 @@ const FIELDS = [ // key, label, default, multiline
 const defaults = () => ({
   theme: Object.fromEntries(FIELDS.map((f) => [f[0], f[2]])),
   colors: [...PALETTES.Rainbow], mirrorSpine: true, layers: [],
-  format: 'vhs', splitLid: false, jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
+  style: 'rainbow', format: 'vhs', splitLid: false, jflap: 15.9, jextra: 0, // jcard: back-flap width mm, fold-out panel count
   fonts: [], // uploaded: { name, asset }
   paper: 'A3', mode: 'rgb', intent: 0, pdfKind: 'raster', guides: true, dielineOnly: false, profile: DEFAULT_PROFILE, // profile: { name, builtin } | { name, asset }
 });
@@ -87,8 +88,8 @@ function text(ctx, str, x, y, size, { weight = 800, color, maxW = Infinity, alig
   ctx.letterSpacing = '0px';
 }
 
-function wrap(ctx, str, x, y, maxW, size, lh, color, weight = 500, maxY = Infinity) { // stops at maxY
-  ctx.font = `${weight} ${size}px Montserrat`; ctx.fillStyle = color; ctx.textAlign = 'left';
+function wrap(ctx, str, x, y, maxW, size, lh, color, weight = 500, maxY = Infinity, font = 'Montserrat') { // stops at maxY
+  ctx.font = `${weight} ${size}px "${font}"`; ctx.fillStyle = color; ctx.textAlign = 'left';
   let line = '';
   for (const word of str.split(/\s+/)) {
     const t = line ? `${line} ${word}` : word;
@@ -274,27 +275,35 @@ function insidesText(ctx, P) { // heading + one-per-line list, flowing across fo
   }));
 }
 
-// Theme by panel role (key without its number: spine1 → spine). Shapes go under the layers, text over them.
+// Styles draw panels by role (panel key without its number: spine1 → spine). Shapes go under the layers, text
+// over them. front/back/spine/side are drawn at VHS height and scaled; spines under 20mm use the spineN drawing.
 const role = (k) => k.replace(/\d+$/, '');
-const wide = (w) => w >= 20; // VHS-style spine (badges, stacked title) vs a thin one (title along it)
-const SHAPES = {
-  front: scaled(frontShapes), back: scaled(backShapes),
-  spine: (c, w, h) => (wide(w) ? scaled(spineShapes) : jSpineShapes)(c, w, h),
-  side: scaled((c, w, h) => spineShapes(c, w, h, !S.mirrorSpine)),
-  flap: flapShapes, inside: (c, w) => stripes(c, 6, w, 1.2),
-};
-const TEXTS = {
-  front: scaled(frontText), back: scaled(backText),
-  spine: (c, w, h) => (wide(w) ? scaled(spineText) : jSpineText)(c, w, h),
-  side: (c, w, h) => S.mirrorSpine && scaled(spineText)(c, w, h),
-  flap: flapText,
-  top: (c, w, h) => endText(c, w, h), bottom: (c, w, h) => { c.translate(w, h); c.rotate(Math.PI); endText(c, w, h); }, // bottom reads upside down
+const RAINBOW = {
+  label: 'Rainbow Stripes', media: 'Any',
+  shapes: { front: frontShapes, back: backShapes, spine: spineShapes, spineN: jSpineShapes, flap: flapShapes, inside: (c, w) => stripes(c, 6, w, 1.2) },
+  texts: { front: frontText, back: backText, spine: spineText, spineN: jSpineText, flap: flapText, top: endText, bottom: endText },
+  insides: insidesText, palette: PALETTES.Rainbow,
 };
 function endText(ctx, w, h) { // side-load end panels: the spine title, centred
   text(ctx, S.theme.spineTitle, w / 2, h / 2 + Math.min(h * 0.45, 12) * 0.36, Math.min(h * 0.45, 12), { color: col().dark, align: 'center', maxW: w - 12 });
 }
-function themeShapes(ctx, P) { for (const [k, p] of Object.entries(P)) if (SHAPES[role(k)]) inPanel(ctx, p, SHAPES[role(k)]); }
-function themeText(ctx, P) { for (const [k, p] of Object.entries(P)) if (TEXTS[role(k)]) inPanel(ctx, p, TEXTS[role(k)]); insidesText(ctx, P); }
+const STYLES = { rainbow: RAINBOW, ...makeStyles({ text, wrap, boxed, barcode, col, T: () => S.theme, badges, O, inPanel }) };
+const style = () => STYLES[S.style] || RAINBOW;
+
+function drawRole(ctx, pass, k, p) { // pass: 'shapes' | 'texts'
+  const pick = (r) => style()[pass][r] || RAINBOW[pass][r];
+  let r = role(k), fn;
+  if (r === 'side') { // VHS second spine: the style's spine, text only if mirrored (rainbow draws caps-only when plain)
+    if (pass === 'texts' && !S.mirrorSpine) return;
+    fn = scaled(pass === 'shapes' && !S.mirrorSpine && style() === RAINBOW ? (c, w, h) => spineShapes(c, w, h, true) : pick('spine'));
+  } else if (r === 'spine') fn = p.w >= 20 ? scaled(pick('spine')) : pick('spineN');
+  else if (r === 'front' || r === 'back') fn = scaled(pick(r));
+  else if (r === 'bottom') { const f = pick('bottom'); fn = f && ((c, w, h) => { c.translate(w, h); c.rotate(Math.PI); f(c, w, h); }); } // reads upside down
+  else fn = pick(r);
+  if (fn) inPanel(ctx, p, fn);
+}
+function themeShapes(ctx, P) { for (const [k, p] of Object.entries(P)) drawRole(ctx, 'shapes', k, p); }
+function themeText(ctx, P) { for (const [k, p] of Object.entries(P)) drawRole(ctx, 'texts', k, p); (style().insides || RAINBOW.insides)(ctx, P); }
 
 function panelRect(clip) { const p = F.panels[clip]; return p ? ext(p) : null; }
 
@@ -343,7 +352,7 @@ function drawContent(ctx) { // ctx origin = dieline top-left
       ctx.restore();
     }
   } else {
-    ctx.fillStyle = col().light; ctx.fillRect(-B, -B, AW, AH);
+    ctx.fillStyle = col()[style().base || 'light']; ctx.fillRect(-B, -B, AW, AH); // flaps, lids, gaps
     themeShapes(ctx, P);
     for (const l of S.layers) if (l.visible) drawLayer(ctx, l);
     themeText(ctx, P);
@@ -544,7 +553,7 @@ function jump(i) {
 }
 const undo = () => jump(hi - 1), redo = () => jump(hi + 1);
 
-const NAMES = { ...Object.fromEntries(FIELDS.map((f) => [f[0], f[1]])), colors: 'Palette', format: 'Format', splitLid: 'Split lid', jflap: 'Flap width', jextra: 'Fold-outs', paper: 'Paper', mode: 'Colour mode', intent: 'Rendering intent', pdfKind: 'PDF type', guides: 'Cut & fold lines', dielineOnly: 'Test print', mirrorSpine: 'Mirror spine', profile: 'ICC profile', fonts: 'Upload font' };
+const NAMES = { ...Object.fromEntries(FIELDS.map((f) => [f[0], f[1]])), colors: 'Palette', style: 'Style', format: 'Format', splitLid: 'Split lid', jflap: 'Flap width', jextra: 'Fold-outs', paper: 'Paper', mode: 'Colour mode', intent: 'Rendering intent', pdfKind: 'PDF type', guides: 'Cut & fold lines', dielineOnly: 'Test print', mirrorSpine: 'Mirror spine', profile: 'ICC profile', fonts: 'Upload font' };
 function describe(a, b) { // history label for the change a → b (JSON snapshots)
   a = JSON.parse(a); b = JSON.parse(b);
   const name = (l) => (l.type === 'image' ? l.name : `“${l.text.split('\n')[0].slice(0, 18)}”`);
@@ -722,6 +731,11 @@ async function uploadFont(file) {
 // ---------- theme + export panels ----------
 
 $('#preset').innerHTML = `<option value="">Custom</option>${opts(Object.keys(PALETTES))}`;
+$('#style').innerHTML = [...new Set(Object.values(STYLES).map((st) => st.media))].map((m) => { // grouped by the media each style is from
+  const ks = Object.keys(STYLES).filter((k) => STYLES[k].media === m);
+  return `<optgroup label="${esc(m)}">${opts(ks, ks.map((k) => STYLES[k].label))}</optgroup>`;
+}).join('');
+$('#style').onchange = (e) => { S.style = e.target.value; S.colors = [...style().palette]; commit(); syncUI(); render(); }; // each style brings its period palette
 $('#colors').innerHTML = S.colors.map((_, i) => `<input type="color" data-c="${i}" title="${i < 5 ? `Stripe ${i + 1}` : i === 5 ? 'Dark' : 'Light'}">`).join('');
 $('#fields').innerHTML = FIELDS.map(([k, label, , multi]) => `<label>${label}${multi ? `<textarea rows="3" data-k="${k}"></textarea>` : `<input data-k="${k}">`}</label>`).join('');
 
@@ -745,6 +759,7 @@ function syncUI() {
   const papers = PAPERS.filter((p) => !p.w || fits(p, F)); // only sheets this format fits on
   $('#paper').innerHTML = opts(papers.map((p) => p.name));
   if (!papers.some((p) => p.name === S.paper)) S.paper = papers[0].name;
+  $('#style').value = STYLES[S.style] ? S.style : 'rainbow';
   for (const i of $('#colors').children) i.value = S.colors[+i.dataset.c];
   $('#preset').value = Object.keys(PALETTES).find((k) => PALETTES[k].join() === S.colors.join()) || '';
   for (const i of $('#fields').querySelectorAll('[data-k]')) if (i !== document.activeElement) i.value = S.theme[i.dataset.k] ?? '';
@@ -870,6 +885,7 @@ async function exportVector() {
   geo();
   const cmyk = S.mode === 'cmyk', c = cmyk ? await getCms() : null;
   await Promise.all([400, 500, 600, 700, 800].map((w) => loadOT('Montserrat', w)).concat(
+    (style().fonts || []).map(([f, w]) => loadOT(f, w)),
     S.layers.filter((l) => l.type === 'text' && l.visible).map((l) => loadOT(l.font, l.weight))));
   const font = (family, weight) => otFonts.get(`${family}|${weight}`) || otFonts.get(`${family}|400`) || otFonts.get('Montserrat|400');
   const cache = new Map(), color = (rgb) => { // CMYK: convert each flat colour once through the ICC transform

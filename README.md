@@ -12,6 +12,18 @@ Make printable covers for obsolete media. Pick a format under **Format**:
 | Blu-ray case wrap | 269 × 148 mm, 12 mm spine (some cases are 14 mm) | A4 / Letter |
 | CD jewel case | tray card 151 × 118 mm (6.5 mm spines) + booklet front 120 × 120 mm, side by side | A4 |
 
+**Styles** (left panel) are period designs; any style works on any format, and picking one loads its palette:
+
+| Media | Styles |
+|---|---|
+| Any | Rainbow Stripes |
+| VHS | Blank Tape '84 (silver band, speed stripes) · Rental '91 (photo sleeve — add an image layer — title block, rewind sticker) · Home Recording (ruled label, handwritten) |
+| Cassette | Chrome Type II '82 · Normal Bias '79 (colour bars, A/B lines) · Mixtape (lined card, marker) |
+| CD | '90s Jewel (colour ramp, disc rings) · Promo CD (not-for-sale band) |
+| DVD / Blu-ray | 2000s Keepcase (photo, top billing, credit block) · Numbered Collection |
+
+These are generic period looks, not copies of any brand's packaging.
+
 Case sizes vary a little between manufacturers — print a test (below) and check it in your actual case.
 
 Fill in the retro theme, stack image and text layers on it, and export a 300 DPI PDF (RGB, or CMYK through an ICC profile) or a PNG.
@@ -55,7 +67,7 @@ You need to be online for Google Fonts and for the colour-management library (lo
 
 ## Develop
 
-No build step. `lib.js` holds the dieline geometry and the PDF writer, and `app.js` holds the editor.
+No build step. `lib.js` holds the dieline geometry and the PDF writer, `app.js` the editor, `themes.js` the period styles and `vector.js` the vector-PDF drawing context.
 
 ```sh
 node check.mjs   # geometry + PDF xref self-check
